@@ -24,7 +24,7 @@ export async function exigirUsuario() {
   const { supabase, user, profile } = await usuarioAtivo();
   if (!user) return { erro: NextResponse.json({ erro: "Faça login novamente" }, { status: 401 }) };
   if (!profile) return { erro: NextResponse.json({ erro: "Acesso não liberado" }, { status: 403 }) };
-  return { supabase };
+  return { supabase, user, profile };
 }
 
 export function respostaErro(err: unknown) {

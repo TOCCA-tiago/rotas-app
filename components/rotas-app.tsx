@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Nota } from "@/lib/tiny";
 import type { ResultadoRota } from "@/lib/osrm";
 import type { PinoMapa } from "@/components/mapa";
+import type { ParadaSalva, RotaSalva, RotaSalvaResumo } from "@/lib/rotas-salvas";
 
 const Mapa = dynamic(() => import("@/components/mapa"), {
   ssr: false,
@@ -37,12 +38,13 @@ const fmtTempo = (s: number) => {
   return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")} min`;
 };
 const fmtMoeda = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const fmtData = (iso: string | null) => (iso ? iso.slice(0, 10).split("-").reverse().join("/") : "sem data");
 const isoLocal = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function api<T>(url: string, body?: unknown): Promise<T> {
+async function api<T>(url: string, body?: unknown, method?: string): Promise<T> {
   const res = await fetch(url, {
-    method: body ? "POST" : "GET",
+    method: method ?? (body ? "POST" : "GET"),
     headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -75,6 +77,12 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
   const [buscandoNumeros, setBuscandoNumeros] = useState(false);
   const [origemTexto, setOrigemTexto] = useState(origemInicial?.endereco ?? "");
   const [localizandoOrigem, setLocalizandoOrigem] = useState(false);
+  const [painel, setPainel] = useState<"nova" | "salvas">("nova");
+  const [rotaSalva, setRotaSalva] = useState<{ id: string; nome: string; data: string } | null>(null);
+  const [formSalvar, setFormSalvar] = useState<{ nome: string; data: string } | null>(null);
+  const [salvando, setSalvando] = useState(false);
+  const [listaSalvas, setListaSalvas] = useState<RotaSalvaResumo[] | null>(null);
+  const [filtroSalvas, setFiltroSalvas] = useState("");
 
   // Endereço de saída escolhido na tela fica salvo neste navegador
   useEffect(() => {
@@ -86,6 +94,96 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
       }
     } catch {}
   }, []);
+
+  async function carregarSalvas() {
+    try {
+      const { rotas } = await api<{ rotas: RotaSalvaResumo[] }>("/api/rotas-salvas");
+      setListaSalvas(rotas);
+    } catch (err) {
+      alert(`Erro ao carregar as rotas salvas: ${(err as Error).message}`);
+      setListaSalvas([]);
+    }
+  }
+
+  useEffect(() => {
+    if (painel === "salvas" && listaSalvas === null) carregarSalvas();
+  }, [painel, listaSalvas]);
+
+  function abrirFormSalvar() {
+    if (!resultado) return;
+    const hoje = isoLocal(new Date());
+    setFormSalvar(
+      rotaSalva
+        ? { nome: rotaSalva.nome, data: rotaSalva.data }
+        : { nome: `Rota ${fmtData(hoje).slice(0, 5)} · ${resultado.ordem.length} entregas`, data: hoje }
+    );
+  }
+
+  async function salvarRota(comoNova: boolean) {
+    if (!resultado || !formSalvar || !origem || origem.lat == null) return;
+    setSalvando(true);
+    try {
+      const paradas: ParadaSalva[] = resultado.ordem.map((p) => {
+        const c = coords[p.id];
+        return { ...notaPorId.get(p.id)!, lat: c.lat!, lon: c.lon!, precisao: c.precisao };
+      });
+      const corpo = {
+        nome: formSalvar.nome,
+        data_entrega: formSalvar.data,
+        origem,
+        retornar: !!resultado.retorno,
+        paradas,
+        resultado,
+      };
+      const atualizar = rotaSalva && !comoNova;
+      const { id } = await api<{ id: string }>(
+        atualizar ? `/api/rotas-salvas/${rotaSalva.id}` : "/api/rotas-salvas",
+        corpo,
+        atualizar ? "PUT" : "POST"
+      );
+      setRotaSalva({ id, nome: formSalvar.nome, data: formSalvar.data });
+      setFormSalvar(null);
+      setListaSalvas(null); // recarrega a lista na próxima vez
+    } catch (err) {
+      alert(`Erro ao salvar a rota: ${(err as Error).message}`);
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  async function abrirRotaSalva(id: string) {
+    try {
+      const { rota } = await api<{ rota: RotaSalva }>(`/api/rotas-salvas/${id}`);
+      const notasRota: Nota[] = rota.paradas.map(({ lat, lon, precisao, ...nota }) => nota);
+      setNotas(notasRota);
+      setSelecionadas(notasRota.map((n) => n.id));
+      setCoords(Object.fromEntries(rota.paradas.map((p) => [p.id, { lat: p.lat, lon: p.lon, precisao: p.precisao }])));
+      setOrigem(rota.origem);
+      setOrigemTexto(rota.origem.endereco);
+      setRetornar(rota.retornar);
+      setResultado(rota.resultado);
+      setRotaSalva({ id: rota.id, nome: rota.nome, data: rota.data_entrega ?? "" });
+      setFormSalvar(null);
+      setBuscou(true);
+      setFiltroLista("");
+      setProgresso("");
+      setPainel("nova");
+      setAba("mapa");
+    } catch (err) {
+      alert(`Erro ao abrir a rota: ${(err as Error).message}`);
+    }
+  }
+
+  async function excluirRotaSalva(r: RotaSalvaResumo) {
+    if (!confirm(`Excluir a rota "${r.nome}"? Isso não pode ser desfeito.`)) return;
+    try {
+      await api(`/api/rotas-salvas/${r.id}`, undefined, "DELETE");
+      setListaSalvas((l) => l?.filter((x) => x.id !== r.id) ?? null);
+      if (rotaSalva?.id === r.id) setRotaSalva(null);
+    } catch (err) {
+      alert(`Erro ao excluir: ${(err as Error).message}`);
+    }
+  }
 
   async function localizarOrigem() {
     const endereco = origemTexto.trim();
@@ -121,6 +219,8 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
     const numeros = [...new Set(numerosTexto.split(/[^0-9]+/).filter(Boolean).map((n) => String(Number(n))))];
     if (!numeros.length) return;
     setBuscandoNumeros(true);
+    setRotaSalva(null);
+    setFormSalvar(null);
     const encontradas: Nota[] = [];
     const naoEncontradas: string[] = [];
     try {
@@ -191,6 +291,8 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
       }
       setNotas(todas);
       setSelecionadas([]);
+      setRotaSalva(null);
+      setFormSalvar(null);
       setResultado(null);
       setBuscou(true);
       setProgresso("");
@@ -375,6 +477,50 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
       </div>
 
       <aside className={`${aba === "lista" ? "flex" : "hidden"} min-h-0 w-full flex-col gap-3 overflow-y-auto bg-[#faf8f6] p-3 md:flex md:w-[400px] md:shrink-0 md:border-r md:border-marca-borda print:hidden`}>
+        <div className="flex rounded-xl border border-marca-borda bg-white p-1 text-sm">
+          {(["nova", "salvas"] as const).map((pn) => (
+            <button key={pn} onClick={() => setPainel(pn)}
+              className={`flex-1 rounded-lg py-1.5 font-medium ${painel === pn ? "bg-marca-amarelo text-[#111]" : "text-slate-600 hover:bg-marca-cinza/50"}`}>
+              {pn === "nova" ? "Nova rota" : "Rotas salvas"}
+            </button>
+          ))}
+        </div>
+
+        {painel === "salvas" && (
+          <section className="flex min-h-0 flex-1 flex-col gap-2 rounded-xl border border-marca-borda bg-white p-3">
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold">Rotas salvas</h2>
+              <button onClick={() => { setListaSalvas(null); }} className="text-xs text-slate-500 underline">Atualizar</button>
+            </div>
+            <input type="search" className={campo} placeholder="Filtrar por nome, data ou quem salvou"
+              value={filtroSalvas} onChange={(e) => setFiltroSalvas(e.target.value)} />
+            <ul className="min-h-0 flex-1 overflow-y-auto">
+              {listaSalvas === null && <li className="py-6 text-center text-sm text-slate-500">Carregando…</li>}
+              {listaSalvas?.length === 0 && <li className="py-6 text-center text-sm text-slate-500">Nenhuma rota salva ainda.</li>}
+              {listaSalvas
+                ?.filter((r) => {
+                  const f = filtroSalvas.trim().toLowerCase();
+                  return !f || `${r.nome} ${fmtData(r.data_entrega)} ${r.criado_por_nome ?? ""}`.toLowerCase().includes(f);
+                })
+                .map((r) => (
+                  <li key={r.id} className={`flex gap-2 border-b border-marca-borda px-1 py-2 ${rotaSalva?.id === r.id ? "bg-marca-amarelo/20" : ""}`}>
+                    <button onClick={() => abrirRotaSalva(r.id)} className="min-w-0 flex-1 text-left">
+                      <p className="truncate text-sm font-semibold">{r.nome}</p>
+                      <p className="text-xs text-slate-600">
+                        {fmtData(r.data_entrega)} · {r.qtd_paradas} entrega(s)
+                        {r.distancia_total ? ` · ${fmtKm(r.distancia_total)}` : ""}
+                        {r.duracao_total ? ` · ${fmtTempo(r.duracao_total)}` : ""}
+                      </p>
+                      <p className="text-xs text-slate-500">por {r.criado_por_nome ?? "—"} em {new Date(r.atualizado_em).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}</p>
+                    </button>
+                    <button onClick={() => excluirRotaSalva(r)} className="self-start rounded-md px-2 py-1 text-xs text-red-700 hover:bg-red-50" aria-label={`Excluir ${r.nome}`}>Excluir</button>
+                  </li>
+                ))}
+            </ul>
+          </section>
+        )}
+
+        {painel === "nova" && (<>
         {!tinyConfigurado && (
           <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">TINY_API_TOKEN não configurado na Vercel.</p>
         )}
@@ -494,6 +640,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
           </button>
           {progresso && !buscandoNumeros && <p className="text-xs text-slate-600">{progresso}</p>}
         </section>
+        </>)}
       </aside>
 
       <section className={`${aba === "mapa" ? "flex" : "hidden"} min-h-0 min-w-0 flex-1 flex-col md:flex print:flex`}>
@@ -506,12 +653,17 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
           <div className="max-h-[42vh] overflow-y-auto border-t border-marca-borda bg-white p-4 print:max-h-none print:overflow-visible print:border-0">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 className="titulo text-2xl">Roteiro de entregas</h2>
+                <h2 className="titulo text-2xl">{rotaSalva ? rotaSalva.nome : "Roteiro de entregas"}</h2>
+                {rotaSalva && <p className="text-xs text-slate-500">Rota salva · entrega em {fmtData(rotaSalva.data || null)}</p>}
                 <p className="text-sm text-slate-600">
                   {resultado.ordem.length} entrega(s) · {fmtKm(resultado.distanciaTotal)} · {fmtTempo(resultado.duracaoTotal)} de direção (sem contar as paradas){recalculando && " · recalculando…"}
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-sm print:hidden">
+                <button onClick={abrirFormSalvar} disabled={recalculando || salvando}
+                  className="rounded-lg bg-marca px-3 py-1.5 font-medium text-white hover:bg-marca-escuro disabled:opacity-50">
+                  {rotaSalva ? "Salvar alterações" : "Salvar rota"}
+                </button>
                 {linksGoogle.map((u, i) => (
                   <a key={u} href={u} target="_blank" rel="noopener noreferrer"
                     className="rounded-lg bg-marca-azul px-3 py-1.5 font-medium text-white hover:opacity-90">
@@ -524,6 +676,28 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                 <button onClick={() => window.print()} className="rounded-lg border border-marca-borda px-3 py-1.5 hover:bg-marca-cinza">Imprimir romaneio</button>
               </div>
             </div>
+            {formSalvar && (
+              <form onSubmit={(e) => { e.preventDefault(); salvarRota(false); }}
+                className="mt-3 flex flex-wrap items-end gap-2 rounded-xl border border-marca-borda bg-[#faf8f6] p-3 text-sm print:hidden">
+                <label className="min-w-[200px] flex-1 text-xs text-slate-600">Nome da rota
+                  <input autoFocus required className={campo} value={formSalvar.nome}
+                    onChange={(e) => setFormSalvar({ ...formSalvar, nome: e.target.value })} />
+                </label>
+                <label className="text-xs text-slate-600">Data da entrega
+                  <input type="date" className={campo} value={formSalvar.data}
+                    onChange={(e) => setFormSalvar({ ...formSalvar, data: e.target.value })} />
+                </label>
+                <button type="submit" disabled={salvando || !formSalvar.nome.trim()}
+                  className="rounded-md bg-marca px-3 py-1.5 font-medium text-white hover:bg-marca-escuro disabled:opacity-50">
+                  {salvando ? "Salvando…" : rotaSalva ? "Salvar alterações" : "Salvar"}
+                </button>
+                {rotaSalva && (
+                  <button type="button" onClick={() => salvarRota(true)} disabled={salvando || !formSalvar.nome.trim()}
+                    className="rounded-md border border-marca-borda px-3 py-1.5 hover:bg-marca-cinza disabled:opacity-50">Salvar como nova</button>
+                )}
+                <button type="button" onClick={() => setFormSalvar(null)} className="px-2 py-1.5 text-slate-500 underline">Cancelar</button>
+              </form>
+            )}
             <ol className="mt-3 list-decimal space-y-0 pl-6 text-sm">
               {resultado.ordem.map((p, k) => {
                 const n = notaPorId.get(p.id)!;
