@@ -71,8 +71,93 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
   const [resultado, setResultado] = useState<ResultadoRota | null>(null);
   const [focar, setFocar] = useState<{ lat: number; lon: number } | null>(null);
   const [aba, setAba] = useState<"lista" | "mapa">("lista"); // só no celular
+  const [numerosTexto, setNumerosTexto] = useState("");
+  const [buscandoNumeros, setBuscandoNumeros] = useState(false);
+  const [origemTexto, setOrigemTexto] = useState(origemInicial?.endereco ?? "");
+  const [localizandoOrigem, setLocalizandoOrigem] = useState(false);
+
+  // Endereço de saída escolhido na tela fica salvo neste navegador
+  useEffect(() => {
+    try {
+      const salvo = JSON.parse(localStorage.getItem("rotas-origem") ?? "null");
+      if (salvo?.endereco && salvo.lat != null) {
+        setOrigem(salvo);
+        setOrigemTexto(salvo.endereco);
+      }
+    } catch {}
+  }, []);
+
+  async function localizarOrigem() {
+    const endereco = origemTexto.trim();
+    if (!endereco) return;
+    setLocalizandoOrigem(true);
+    try {
+      const p = await api<Coord>("/api/origem", { endereco });
+      if (p.lat == null) {
+        alert("Não encontrei esse endereço. Tente com rua, número, cidade, UF e CEP.");
+        return;
+      }
+      const nova = { endereco, lat: p.lat, lon: p.lon };
+      setOrigem(nova);
+      setResultado(null);
+      setFocar({ lat: p.lat, lon: p.lon! });
+      try {
+        localStorage.setItem("rotas-origem", JSON.stringify(nova));
+      } catch {}
+    } catch (err) {
+      alert(`Erro ao localizar o endereço de saída: ${(err as Error).message}`);
+    } finally {
+      setLocalizandoOrigem(false);
+    }
+  }
 
   const notaPorId = useMemo(() => new Map(notas.map((n) => [n.id, n])), [notas]);
+  const selecionadasAtuais = selecionadas;
+  const notaPorIdAtual = notaPorId;
+
+  // Busca cada número de NF digitado, seleciona as encontradas e já monta a rota
+  async function roteirizarNumeros(e: React.FormEvent) {
+    e.preventDefault();
+    const numeros = [...new Set(numerosTexto.split(/[^0-9]+/).filter(Boolean).map((n) => String(Number(n))))];
+    if (!numeros.length) return;
+    setBuscandoNumeros(true);
+    const encontradas: Nota[] = [];
+    const naoEncontradas: string[] = [];
+    try {
+      for (const [i, numero] of numeros.entries()) {
+        setProgresso(`Buscando NF ${numero} no Tiny… ${i + 1}/${numeros.length}`);
+        const r = await api<{ notas: Nota[] }>(`/api/notas?numero=${numero}&pagina=1`);
+        const nota = r.notas.find((n) => String(Number(n.numero)) === numero);
+        if (!nota) {
+          naoEncontradas.push(numero);
+          continue;
+        }
+        if (!nota.endereco) {
+          const { nota: completa } = await api<{ nota: Nota | null }>(`/api/notas/${nota.id}`).catch(() => ({ nota: null }));
+          if (completa) Object.assign(nota, completa);
+        }
+        encontradas.push(nota);
+      }
+      const ids = encontradas.filter((n) => n.endereco).map((n) => n.id);
+      const semEndereco = encontradas.filter((n) => !n.endereco).map((n) => n.numero);
+      const novasNotas = [...encontradas, ...notas.filter((n) => !encontradas.some((x) => x.id === n.id))];
+      setNotas(novasNotas);
+      setSelecionadas(ids);
+      setBuscou(true);
+      const avisos = [
+        naoEncontradas.length && `NF não encontrada(s) no Tiny: ${naoEncontradas.join(", ")}`,
+        semEndereco.length && `NF sem endereço: ${semEndereco.join(", ")}`,
+      ].filter(Boolean);
+      if (avisos.length) alert(avisos.join("\n"));
+      if (ids.length) await montarRota(ids, new Map(novasNotas.map((n) => [n.id, n])));
+      else setProgresso("");
+    } catch (err) {
+      setProgresso("");
+      alert(`Erro ao buscar as notas: ${(err as Error).message}`);
+    } finally {
+      setBuscandoNumeros(false);
+    }
+  }
 
   const visiveis = useMemo(() => {
     const f = filtroLista.trim().toLowerCase();
@@ -133,9 +218,9 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
     setSelecionadas((s) => (todasMarcadas ? s.filter((id) => !ids.includes(id)) : [...s, ...ids.filter((id) => !s.includes(id))]));
   }
 
-  async function montarRota() {
+  async function montarRota(selecionadas: string[] = selecionadasAtuais, notaPorId = notaPorIdAtual) {
     if (!origem || origem.lat == null || origem.lon == null) {
-      alert("Endereço de saída não configurado ou não localizado (variável ORIGEM_ENDERECO na Vercel).");
+      alert("Informe o endereço de saída e clique em Localizar (seção Rota).");
       return;
     }
     setCalculando(true);
@@ -264,8 +349,19 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
           <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">TINY_API_TOKEN não configurado na Vercel.</p>
         )}
 
+        <form onSubmit={roteirizarNumeros} className="space-y-2 rounded-xl border border-marca-borda bg-white p-3">
+          <h2 className="font-semibold">Roteirizar por número da NF</h2>
+          <textarea rows={3} className={campo} placeholder="Ex.: 1234, 1240, 1251 (separe por vírgula, espaço ou uma por linha)"
+            value={numerosTexto} onChange={(e) => setNumerosTexto(e.target.value)} />
+          <button type="submit" disabled={buscandoNumeros || calculando || !numerosTexto.trim()}
+            className="w-full rounded-md bg-marca px-3 py-2 text-sm font-medium text-white hover:bg-marca-escuro disabled:opacity-50">
+            {buscandoNumeros ? "Buscando no Tiny…" : "Montar rota com estas NF"}
+          </button>
+          {progresso && (buscandoNumeros || calculando) && <p className="text-xs text-slate-600">{progresso}</p>}
+        </form>
+
         <form onSubmit={buscarNotas} className="space-y-2 rounded-xl border border-marca-borda bg-white p-3">
-          <h2 className="font-semibold">Notas fiscais emitidas</h2>
+          <h2 className="font-semibold">Ou buscar por período</h2>
           <div className="flex gap-2">
             <label className="flex-1 text-xs text-slate-600">De
               <input type="date" required className={campo} value={filtros.dataInicial}
@@ -338,8 +434,21 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
 
         <section className="space-y-2 rounded-xl border border-marca-borda bg-white p-3 text-sm">
           <h2 className="font-semibold">Rota</h2>
-          <p className="text-xs text-slate-500">
-            Saída: {origem ? `${origem.endereco}${origem.lat == null ? " (não localizada)" : ""}` : "configure ORIGEM_ENDERECO na Vercel"}
+          <label className="block text-xs text-slate-600">Endereço de saída
+            <div className="flex gap-2">
+              <input type="text" className={campo} placeholder="Rua, número, cidade - UF, CEP" value={origemTexto}
+                onChange={(e) => setOrigemTexto(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); localizarOrigem(); } }} />
+              <button type="button" onClick={localizarOrigem} disabled={localizandoOrigem || !origemTexto.trim()}
+                className="shrink-0 rounded-md border border-marca-borda px-2.5 text-sm hover:bg-marca-cinza disabled:opacity-50">
+                {localizandoOrigem ? "…" : "Localizar"}
+              </button>
+            </div>
+          </label>
+          <p className={`text-xs ${origem?.lat != null && origem.endereco === origemTexto.trim() ? "text-green-700" : "text-amber-700"}`}>
+            {origem?.lat != null && origem.endereco === origemTexto.trim()
+              ? "✓ Saída localizada no mapa (⌂). Arraste o ícone se precisar ajustar."
+              : "Digite o endereço de saída e clique em Localizar."}
           </p>
           <label className="flex items-center gap-2">
             <input type="checkbox" checked={otimizar} onChange={(e) => { setOtimizar(e.target.checked); setResultado(null); }} />
@@ -349,11 +458,11 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
             <input type="checkbox" checked={retornar} onChange={(e) => { setRetornar(e.target.checked); setResultado(null); }} />
             Voltar ao ponto de saída no final
           </label>
-          <button onClick={montarRota} disabled={!selecionadas.length || calculando}
+          <button onClick={() => montarRota()} disabled={!selecionadas.length || calculando}
             className="w-full rounded-md bg-marca px-3 py-2 font-medium text-white hover:bg-marca-escuro disabled:opacity-50">
             {calculando ? "Montando…" : `Montar rota (${selecionadas.length})`}
           </button>
-          {progresso && <p className="text-xs text-slate-600">{progresso}</p>}
+          {progresso && !buscandoNumeros && <p className="text-xs text-slate-600">{progresso}</p>}
         </section>
       </aside>
 

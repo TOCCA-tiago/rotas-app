@@ -16,6 +16,7 @@ export async function GET(request: NextRequest) {
       dataFinal: q.get("dataFinal") ?? undefined,
       situacao: q.get("situacao") ?? undefined,
       cliente: q.get("cliente") ?? undefined,
+      numero: q.get("numero") ?? undefined,
       pagina: Math.max(1, Number(q.get("pagina")) || 1),
     });
     return NextResponse.json(r);

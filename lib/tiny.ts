@@ -131,6 +131,7 @@ export async function pesquisarNotas(filtros: {
   dataFinal?: string;
   situacao?: string;
   cliente?: string;
+  numero?: string;
   pagina: number;
 }): Promise<{ notas: Nota[]; numeroPaginas: number }> {
   const params: Record<string, string> = { tipoNota: "S", pagina: String(filtros.pagina) };
@@ -138,6 +139,7 @@ export async function pesquisarNotas(filtros: {
   if (filtros.dataFinal) params.dataFinal = isoParaBr(filtros.dataFinal);
   if (filtros.situacao) params.situacao = filtros.situacao;
   if (filtros.cliente) params.cliente = filtros.cliente;
+  if (filtros.numero) params.numero = filtros.numero;
 
   const ret = await tiny("notas.fiscais.pesquisa", params);
   if (!ret) return { notas: [], numeroPaginas: 0 };
