@@ -314,6 +314,36 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
     return links;
   }, [resultado, coords, origemMapa]);
 
+  const [recalculando, setRecalculando] = useState(false);
+  const [arrastando, setArrastando] = useState<number | null>(null);
+
+  // Troca manual da ordem: recalcula o trajeto seguindo exatamente a nova sequência
+  async function reordenar(ids: string[]) {
+    if (!resultado || !origem || origem.lat == null || origem.lon == null || recalculando) return;
+    setRecalculando(true);
+    try {
+      const r = await api<ResultadoRota>("/api/rota", {
+        origem: { lat: origem.lat, lon: origem.lon },
+        paradas: ids.map((id) => ({ id, lat: coords[id].lat!, lon: coords[id].lon! })),
+        otimizar: false,
+        retornar: !!resultado.retorno,
+      });
+      setResultado(r);
+    } catch (err) {
+      alert(`Erro ao recalcular a rota: ${(err as Error).message}`);
+    } finally {
+      setRecalculando(false);
+    }
+  }
+
+  function moverParada(de: number, para: number) {
+    if (!resultado || de === para || para < 0 || para >= resultado.ordem.length) return;
+    const ids = resultado.ordem.map((p) => p.id);
+    const [id] = ids.splice(de, 1);
+    ids.splice(para, 0, id);
+    reordenar(ids);
+  }
+
   function exportarCsv() {
     if (!resultado) return;
     const linhas: (string | number)[][] = [["Ordem", "NF", "Cliente", "Telefone", "Endereço", "Valor", "Km trecho", "Min trecho"]];
@@ -478,7 +508,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
               <div>
                 <h2 className="titulo text-2xl">Roteiro de entregas</h2>
                 <p className="text-sm text-slate-600">
-                  {resultado.ordem.length} entrega(s) · {fmtKm(resultado.distanciaTotal)} · {fmtTempo(resultado.duracaoTotal)} de direção (sem contar as paradas)
+                  {resultado.ordem.length} entrega(s) · {fmtKm(resultado.distanciaTotal)} · {fmtTempo(resultado.duracaoTotal)} de direção (sem contar as paradas){recalculando && " · recalculando…"}
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-sm print:hidden">
@@ -488,20 +518,43 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                     Abrir no Google Maps{linksGoogle.length > 1 ? ` (parte ${i + 1})` : ""}
                   </a>
                 ))}
+                <button onClick={() => resultado && reordenar(resultado.ordem.map((p) => p.id).reverse())} disabled={recalculando}
+                  className="rounded-lg border border-marca-borda px-3 py-1.5 hover:bg-marca-cinza disabled:opacity-50">⇅ Inverter sentido</button>
                 <button onClick={exportarCsv} className="rounded-lg border border-marca-borda px-3 py-1.5 hover:bg-marca-cinza">Exportar CSV</button>
                 <button onClick={() => window.print()} className="rounded-lg border border-marca-borda px-3 py-1.5 hover:bg-marca-cinza">Imprimir romaneio</button>
               </div>
             </div>
             <ol className="mt-3 list-decimal space-y-0 pl-6 text-sm">
-              {resultado.ordem.map((p) => {
+              {resultado.ordem.map((p, k) => {
                 const n = notaPorId.get(p.id)!;
+                const total = resultado.ordem.length;
+                const botao = "h-7 w-7 rounded-md border border-marca-borda leading-none hover:bg-marca-cinza disabled:opacity-30";
                 return (
-                  <li key={p.id} className="border-b border-marca-borda py-2">
-                    <strong>{n.cliente}</strong> — NF {n.numero}{n.fone && ` · ${n.fone}`}
-                    <br />
-                    {n.enderecoTexto}
-                    <br />
-                    <span className="text-xs text-slate-500">+{fmtKm(p.distanciaTrecho)} · {fmtTempo(p.duracaoTrecho)}</span>
+                  <li key={p.id}
+                    draggable={!recalculando}
+                    onDragStart={() => setArrastando(k)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => { e.preventDefault(); if (arrastando != null) moverParada(arrastando, k); setArrastando(null); }}
+                    onDragEnd={() => setArrastando(null)}
+                    className={`border-b border-marca-borda py-2 ${arrastando === k ? "opacity-40" : ""} ${recalculando ? "opacity-60" : ""}`}>
+                    <div className="flex items-start gap-3">
+                      <div className="min-w-0 flex-1">
+                        <strong>{n.cliente}</strong> — NF {n.numero}{n.fone && ` · ${n.fone}`}
+                        <br />
+                        {n.enderecoTexto}
+                        <br />
+                        <span className="text-xs text-slate-500">+{fmtKm(p.distanciaTrecho)} · {fmtTempo(p.duracaoTrecho)}</span>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1 print:hidden" title="Arraste a linha ou use as setas para mudar a ordem">
+                        <button className={botao} disabled={recalculando || k === 0} onClick={() => moverParada(k, k - 1)} aria-label="Subir">↑</button>
+                        <button className={botao} disabled={recalculando || k === total - 1} onClick={() => moverParada(k, k + 1)} aria-label="Descer">↓</button>
+                        <select value={k} disabled={recalculando} onChange={(e) => moverParada(k, Number(e.target.value))}
+                          className="h-7 rounded-md border border-marca-borda bg-white px-1 text-xs" aria-label="Mover para a posição">
+                          {resultado.ordem.map((_, i) => <option key={i} value={i}>{i + 1}º</option>)}
+                        </select>
+                        <span className="cursor-grab select-none px-1 text-slate-400" aria-hidden>⋮⋮</span>
+                      </div>
+                    </div>
                   </li>
                 );
               })}
