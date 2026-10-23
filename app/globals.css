@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-white font-sans text-[#111111];
+}
+
+/* Schabo Condensed: só em caixa alta, para títulos e destaques (MIV TOCCA). */
+@layer components {
+  .titulo {
+    @apply font-display font-normal uppercase leading-[0.95] tracking-[0.01em];
+  }
+}
