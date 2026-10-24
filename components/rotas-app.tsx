@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Nota } from "@/lib/tiny";
+import type { Endereco, Nota } from "@/lib/tiny";
 import type { ResultadoRota } from "@/lib/osrm";
 import type { PinoMapa } from "@/components/mapa";
 import type { ParadaSalva, RotaSalva, RotaSalvaResumo } from "@/lib/rotas-salvas";
@@ -12,7 +12,7 @@ const Mapa = dynamic(() => import("@/components/mapa"), {
   loading: () => <div className="flex h-full items-center justify-center text-sm text-slate-500">Carregando mapa…</div>,
 });
 
-type Origem = { endereco: string; lat: number | null; lon: number | null };
+type Origem = { endereco: string; lat: number | null; lon: number | null; manual?: boolean };
 type Coord = { lat: number | null; lon: number | null; precisao: string | null };
 
 const SITUACOES = [
@@ -38,6 +38,21 @@ const fmtTempo = (s: number) => {
   return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")} min`;
 };
 const fmtMoeda = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+// Endereço para o Google Maps localizar sozinho: sem complemento (apto, sala, "recepção com…"),
+// que costuma confundir a busca.
+function enderecoGoogle(e: Endereco) {
+  const cep = e.cep.length === 8 ? `${e.cep.slice(0, 5)}-${e.cep.slice(5)}` : e.cep;
+  return [
+    [e.logradouro, e.numero].filter(Boolean).join(", "),
+    e.bairro,
+    [e.cidade, e.uf].filter(Boolean).join(" - "),
+    cep,
+    "Brasil",
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
 const fmtData = (iso: string | null) => (iso ? iso.slice(0, 10).split("-").reverse().join("/") : "sem data");
 const isoLocal = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -377,7 +392,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
   );
 
   const moverOrigem = useCallback((lat: number, lon: number) => {
-    setOrigem((o) => (o ? { ...o, lat, lon } : o));
+    setOrigem((o) => (o ? { ...o, lat, lon, manual: true } : o));
     setResultado(null);
   }, []);
 
@@ -402,19 +417,29 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
 
   const linksGoogle = useMemo(() => {
     if (!resultado || !origemMapa) return [];
-    // Google Maps aceita origem + 9 paradas + destino por link: divide rotas longas
-    const pontos = [origemMapa, ...resultado.ordem.map((p) => coords[p.id] as { lat: number; lon: number })];
-    if (resultado.retorno) pontos.push(origemMapa);
+    // Vai o endereço escrito, para o próprio Google localizar (a posição do OpenStreetMap
+    // pode ser só aproximada). Pino arrastado à mão vai como coordenada, pois foi conferido.
     const ll = (p: { lat: number; lon: number }) => `${p.lat.toFixed(6)},${p.lon.toFixed(6)}`;
+    const saida = origem?.manual || !origemMapa.endereco ? ll(origemMapa) : origemMapa.endereco;
+    const pontos = [
+      saida,
+      ...resultado.ordem.map((p) => {
+        const c = coords[p.id];
+        const e = notaPorId.get(p.id)?.endereco;
+        return c?.precisao === "manual" || !e ? ll(c as { lat: number; lon: number }) : enderecoGoogle(e);
+      }),
+    ];
+    if (resultado.retorno) pontos.push(saida);
+    // Google Maps aceita origem + 9 paradas + destino por link: divide rotas longas
     const links: string[] = [];
     for (let i = 0; i < pontos.length - 1; i += 10) {
       const trecho = pontos.slice(i, i + 11);
-      const qs = new URLSearchParams({ api: "1", travelmode: "driving", origin: ll(trecho[0]), destination: ll(trecho[trecho.length - 1]) });
-      if (trecho.length > 2) qs.set("waypoints", trecho.slice(1, -1).map(ll).join("|"));
+      const qs = new URLSearchParams({ api: "1", travelmode: "driving", origin: trecho[0], destination: trecho[trecho.length - 1] });
+      if (trecho.length > 2) qs.set("waypoints", trecho.slice(1, -1).join("|"));
       links.push(`https://www.google.com/maps/dir/?${qs}`);
     }
     return links;
-  }, [resultado, coords, origemMapa]);
+  }, [resultado, coords, origemMapa, origem, notaPorId]);
 
   const [recalculando, setRecalculando] = useState(false);
   const [arrastando, setArrastando] = useState<number | null>(null);

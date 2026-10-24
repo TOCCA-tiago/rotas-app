@@ -16,7 +16,7 @@ export type RotaSalvaResumo = {
 };
 
 export type RotaSalva = RotaSalvaResumo & {
-  origem: { endereco: string; lat: number; lon: number };
+  origem: { endereco: string; lat: number; lon: number; manual?: boolean };
   retornar: boolean;
   paradas: ParadaSalva[];
   resultado: ResultadoRota;
@@ -35,7 +35,7 @@ export function dadosRotaSalva(body: any) {
   return {
     nome: nome.slice(0, 200),
     data_entrega: /^\d{4}-\d{2}-\d{2}$/.test(data) ? data : null,
-    origem: { endereco: String(origem.endereco ?? ""), lat: origem.lat, lon: origem.lon },
+    origem: { endereco: String(origem.endereco ?? ""), lat: origem.lat, lon: origem.lon, manual: !!origem.manual },
     retornar: !!body.retornar,
     paradas,
     resultado,
