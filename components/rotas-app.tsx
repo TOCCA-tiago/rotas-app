@@ -84,6 +84,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
   const [retornar, setRetornar] = useState(true);
   const [origem, setOrigem] = useState(origemInicial);
   const [progresso, setProgresso] = useState("");
+  const [erroGoogle, setErroGoogle] = useState<string | null>(null);
   const [calculando, setCalculando] = useState(false);
   const [resultado, setResultado] = useState<ResultadoRota | null>(null);
   const [focar, setFocar] = useState<{ lat: number; lon: number } | null>(null);
@@ -344,18 +345,24 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
     setResultado(null);
     try {
       const novas = { ...coords };
-      const pendentes = selecionadas.filter((id) => !novas[id] && notaPorId.get(id)?.endereco);
+      // Também refaz os pontos aproximados: o servidor pode ter um resultado melhor (Google)
+      const pendentes = selecionadas.filter(
+        (id) => notaPorId.get(id)?.endereco && !["endereco", "manual"].includes(novas[id]?.precisao ?? "")
+      );
+      let erroG: string | null = null;
       for (const [i, id] of pendentes.entries()) {
         setProgresso(`Localizando endereços… ${i + 1}/${pendentes.length}`);
         try {
           const c = await api<Coord & { cache?: boolean }>("/api/geocode", { endereco: notaPorId.get(id)!.endereco });
           novas[id] = c;
+          if ((c as { erroGoogle?: string }).erroGoogle) erroG = (c as { erroGoogle?: string }).erroGoogle!;
           if (!c.cache) await sleep(1000); // limite do Nominatim
         } catch {
           novas[id] = { lat: null, lon: null, precisao: null };
         }
         setCoords({ ...novas });
       }
+      if (pendentes.length) setErroGoogle(erroG);
 
       const paradas = selecionadas
         .filter((id) => novas[id]?.lat != null)
@@ -659,6 +666,14 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
             <input type="checkbox" checked={retornar} onChange={(e) => { setRetornar(e.target.checked); setResultado(null); }} />
             Voltar ao ponto de saída no final
           </label>
+          {erroGoogle && (
+            <p className="rounded-md bg-red-50 px-2.5 py-2 text-xs text-red-700">
+              O Google não localizou os endereços e o app usou o OpenStreetMap (menos preciso).
+              Motivo: <strong>{erroGoogle}</strong>.
+              {/REQUEST_DENIED|not authorized|not activated|API key/i.test(erroGoogle) &&
+                " Confira no Google Cloud se a Geocoding API está ativada e se a chave permite a Geocoding API."}
+            </p>
+          )}
           <button onClick={() => montarRota()} disabled={!selecionadas.length || calculando}
             className="w-full rounded-md bg-marca px-3 py-2 font-medium text-white hover:bg-marca-escuro disabled:opacity-50">
             {calculando ? "Montando…" : `Montar rota (${selecionadas.length})`}

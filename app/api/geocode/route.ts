@@ -11,8 +11,7 @@ export async function POST(request: Request) {
   const { endereco } = await request.json().catch(() => ({}));
   if (!endereco?.logradouro) return NextResponse.json({ erro: "Endereço inválido" }, { status: 400 });
   try {
-    const ponto = await geocodificar(auth.supabase, endereco);
-    return NextResponse.json(ponto ?? { lat: null, lon: null, precisao: null });
+    return NextResponse.json(await geocodificar(auth.supabase, endereco));
   } catch (err) {
     return respostaErro(err);
   }

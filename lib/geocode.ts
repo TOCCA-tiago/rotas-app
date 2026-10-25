@@ -127,25 +127,30 @@ export async function geocodificar(supabase: SupabaseClient, e: Endereco) {
   const manual = cache.get(chave);
   if (manual?.precisao === "manual") return { lat: manual.lat, lon: manual.lon, precisao: "manual", cache: true };
 
+  let erroGoogle: string | undefined;
   if (usarGoogle()) {
     const g = cache.get(chaveG);
-    if (g) return { lat: g.lat, lon: g.lon, precisao: g.precisao, cache: true };
+    if (g) return { lat: g.lat, lon: g.lon, precisao: g.precisao, fonte: "google", cache: true };
     try {
       const ponto = await google(textoGoogle(e));
       if (ponto) {
         await gravarCache(supabase, chaveG, ponto);
-        return { ...ponto, cache: true }; // Google não precisa da pausa do Nominatim
+        return { ...ponto, fonte: "google", cache: true }; // Google não precisa da pausa do Nominatim
       }
     } catch (err) {
-      console.warn("[geocode] google:", err); // cai para o OpenStreetMap
+      erroGoogle = err instanceof Error ? err.message : String(err);
+      console.warn("[geocode] google:", erroGoogle); // cai para o OpenStreetMap
     }
   }
 
+  // A tela mostra erroGoogle, para ficar claro quando a chave não está funcionando
   const osm = cache.get(chave);
-  if (osm) return { lat: osm.lat, lon: osm.lon, precisao: osm.precisao, cache: true };
+  if (osm) return { lat: osm.lat, lon: osm.lon, precisao: osm.precisao, fonte: "osm", cache: true, erroGoogle };
   const ponto = await geocodificarSemCache(e);
   if (ponto) await gravarCache(supabase, chave, ponto);
-  return ponto ? { ...ponto, cache: false } : null;
+  return ponto
+    ? { ...ponto, fonte: "osm", cache: false, erroGoogle }
+    : { lat: null, lon: null, precisao: null, fonte: null, cache: false, erroGoogle };
 }
 
 export async function salvarManual(supabase: SupabaseClient, chave: string, lat: number, lon: number) {
