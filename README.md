@@ -18,6 +18,7 @@ Mesma base do CRM: Next.js 14 + Tailwind + Supabase + Vercel. Usa **o mesmo proj
    | `NEXT_PUBLIC_SUPABASE_URL` | igual ao do CRM |
    | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | igual ao do CRM |
    | `TINY_API_TOKEN` | igual ao do CRM |
+   | `GOOGLE_MAPS_API_KEY` | opcional, recomendado: chave restrita à Geocoding API (localização precisa) |
    | `ORIGEM_ENDERECO` | endereço de saída das entregas, ex.: `Rua X, 123, Bairro, Cidade - UF, 00000-000` |
 
 3. **Domínio**: em Settings → Domains da Vercel, adicione `rotas.tocca.com.br` e crie o CNAME
@@ -41,7 +42,8 @@ Mesma base do CRM: Next.js 14 + Tailwind + Supabase + Vercel. Usa **o mesmo proj
 |---|---|
 | Notas | `notas.fiscais.pesquisa` (tipo S), uma página por chamada; `nota.fiscal.obter` se faltar endereço. Ignora canceladas, rejeitadas e denegadas |
 | Endereço | Endereço de entrega da nota; se não houver, o do cliente |
-| Mapa | Nominatim/OpenStreetMap e BrasilAPI (CEP), com cache em `rotas_geocache` |
+| Mapa | Google Geocoding (se houver `GOOGLE_MAPS_API_KEY`); senão Nominatim/OpenStreetMap e BrasilAPI (CEP). Cache em `rotas_geocache`; pino arrastado à mão tem prioridade |
+| Google Maps | O link leva o endereço escrito (sem complemento); pinos ajustados à mão vão como coordenada |
 | Rota | OSRM (`trip` otimiza a ordem; `route` segue a ordem de marcação) |
 
 ## Limitações conhecidas

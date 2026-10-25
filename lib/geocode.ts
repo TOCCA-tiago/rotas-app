@@ -65,19 +65,86 @@ async function geocodificarSemCache(e: Endereco): Promise<Ponto | null> {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Google Geocoding (usado quando GOOGLE_MAPS_API_KEY existir; bem mais preciso no Brasil)
+
+const usarGoogle = () => !!process.env.GOOGLE_MAPS_API_KEY;
+
+function precisaoGoogle(r: any): string {
+  const tipo = r.geometry?.location_type;
+  const tipos: string[] = r.types ?? [];
+  if (!r.partial_match && (tipo === "ROOFTOP" || tipo === "RANGE_INTERPOLATED")) return "endereco";
+  if (tipos.includes("street_address") || tipos.includes("premise") || tipos.includes("subpremise")) {
+    return r.partial_match ? "rua" : "endereco";
+  }
+  if (tipos.includes("route")) return "rua";
+  if (tipos.includes("postal_code")) return "cep";
+  if (tipos.some((t) => t.startsWith("sublocality") || t === "neighborhood")) return "bairro";
+  return "cidade";
+}
+
+async function google(endereco: string): Promise<Ponto | null> {
+  const qs = new URLSearchParams({
+    address: endereco,
+    components: "country:BR",
+    region: "br",
+    language: "pt-BR",
+    key: process.env.GOOGLE_MAPS_API_KEY!,
+  });
+  const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?${qs}`, { cache: "no-store" });
+  const j = await res.json().catch(() => ({}));
+  if (j.status === "ZERO_RESULTS") return null;
+  if (j.status !== "OK") throw new Error(`Google Geocoding: ${j.status} ${j.error_message ?? ""}`.trim());
+  const r = j.results[0];
+  return { lat: r.geometry.location.lat, lon: r.geometry.location.lng, precisao: precisaoGoogle(r) };
+}
+
+function textoGoogle(e: Endereco) {
+  const cep = e.cep.length === 8 ? `${e.cep.slice(0, 5)}-${e.cep.slice(5)}` : e.cep;
+  return [[e.logradouro, e.numero].filter(Boolean).join(", "), e.bairro, [e.cidade, e.uf].filter(Boolean).join(" - "), cep]
+    .filter(Boolean)
+    .join(", ");
+}
+
+// ---------------------------------------------------------------------------
+// Cache: ajuste manual (pino arrastado) > resultado do Google > resultado do OpenStreetMap.
+// O Google grava com prefixo "g|", então endereços já localizados pelo OpenStreetMap
+// são refeitos pelo Google na primeira vez em que aparecerem.
+
+async function lerCache(supabase: SupabaseClient, chaves: string[]) {
+  const { data } = await supabase.from("rotas_geocache").select("chave, lat, lon, precisao").in("chave", chaves);
+  return new Map((data ?? []).map((d) => [d.chave as string, d as { lat: number; lon: number; precisao: string }]));
+}
+
+async function gravarCache(supabase: SupabaseClient, chave: string, p: Ponto) {
+  await supabase.from("rotas_geocache").upsert({ chave, ...p, atualizado_em: new Date().toISOString() });
+}
+
 export async function geocodificar(supabase: SupabaseClient, e: Endereco) {
   const chave = chaveEndereco(e);
-  const { data } = await supabase
-    .from("rotas_geocache")
-    .select("lat, lon, precisao")
-    .eq("chave", chave)
-    .maybeSingle();
-  if (data) return { ...data, cache: true };
+  const chaveG = `g|${chave}`;
+  const cache = await lerCache(supabase, [chave, chaveG]);
+  const manual = cache.get(chave);
+  if (manual?.precisao === "manual") return { lat: manual.lat, lon: manual.lon, precisao: "manual", cache: true };
 
-  const ponto = await geocodificarSemCache(e);
-  if (ponto) {
-    await supabase.from("rotas_geocache").upsert({ chave, ...ponto, atualizado_em: new Date().toISOString() });
+  if (usarGoogle()) {
+    const g = cache.get(chaveG);
+    if (g) return { lat: g.lat, lon: g.lon, precisao: g.precisao, cache: true };
+    try {
+      const ponto = await google(textoGoogle(e));
+      if (ponto) {
+        await gravarCache(supabase, chaveG, ponto);
+        return { ...ponto, cache: true }; // Google não precisa da pausa do Nominatim
+      }
+    } catch (err) {
+      console.warn("[geocode] google:", err); // cai para o OpenStreetMap
+    }
   }
+
+  const osm = cache.get(chave);
+  if (osm) return { lat: osm.lat, lon: osm.lon, precisao: osm.precisao, cache: true };
+  const ponto = await geocodificarSemCache(e);
+  if (ponto) await gravarCache(supabase, chave, ponto);
   return ponto ? { ...ponto, cache: false } : null;
 }
 
@@ -89,12 +156,18 @@ export async function salvarManual(supabase: SupabaseClient, chave: string, lat:
 }
 
 export async function geocodificarTexto(supabase: SupabaseClient, endereco: string) {
-  const chave = `texto|${endereco.toLowerCase().trim()}`;
-  const { data } = await supabase.from("rotas_geocache").select("lat, lon, precisao").eq("chave", chave).maybeSingle();
-  if (data) return data;
-  const hit = await nominatim({ q: endereco }).catch(() => null);
-  if (!hit) return null;
-  const ponto = { ...hit, precisao: "endereco" };
-  await supabase.from("rotas_geocache").upsert({ chave, ...ponto, atualizado_em: new Date().toISOString() });
+  const base = `texto|${endereco.toLowerCase().trim()}`;
+  const chave = usarGoogle() ? `g|${base}` : base;
+  const cache = await lerCache(supabase, [chave]);
+  const salvo = cache.get(chave);
+  if (salvo) return { lat: salvo.lat, lon: salvo.lon, precisao: salvo.precisao };
+
+  let ponto: Ponto | null = null;
+  if (usarGoogle()) ponto = await google(endereco).catch((err) => (console.warn("[geocode] google:", err), null));
+  if (!ponto) {
+    const hit = await nominatim({ q: endereco }).catch(() => null);
+    ponto = hit ? { ...hit, precisao: "endereco" } : null;
+  }
+  if (ponto) await gravarCache(supabase, chave, ponto);
   return ponto;
 }
