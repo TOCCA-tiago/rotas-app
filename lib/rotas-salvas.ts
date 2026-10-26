@@ -13,9 +13,14 @@ export type RotaSalvaResumo = {
   criado_por_nome: string | null;
   criado_em: string;
   atualizado_em: string;
+  entregas?: Entregas;
 };
 
+export type Entrega = { status: "entregue" | "nao_entregue"; em: string; por?: string | null; obs?: string | null };
+export type Entregas = Record<string, Entrega>;
+
 export type RotaSalva = RotaSalvaResumo & {
+  entregas?: Entregas;
   origem: { endereco: string; lat: number; lon: number; manual?: boolean };
   retornar: boolean;
   paradas: ParadaSalva[];

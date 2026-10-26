@@ -10,7 +10,7 @@ Mesma base do CRM: Next.js 14 + Tailwind + Supabase + Vercel. Usa **o mesmo proj
 
 1. **Supabase (projeto do CRM)** → SQL Editor → rode `supabase/rotas_geocache.sql`.
    Cria só a tabela `rotas_geocache` (cache de endereços localizados); não mexe em nada do CRM.
-   Depois rode também `supabase/rotas_salvas.sql` (rotas salvas).
+   Depois rode também `supabase/rotas_salvas.sql` (rotas salvas) e `supabase/rotas_entregas.sql` (modo motorista).
 2. **Vercel** → Add New Project → importe este repositório → em Environment Variables:
 
    | Variável | Valor |
@@ -36,7 +36,10 @@ Mesma base do CRM: Next.js 14 + Tailwind + Supabase + Vercel. Usa **o mesmo proj
    cliente. Em uma parada, clique em ⏰ para marcar "chegar entre X e Y" e depois em **⏰ Otimizar com horários**.
 6. Troque a ordem com ↑ ↓, o seletor de posição, arrastando a linha ou com **Inverter sentido**.
 7. **Salvar rota** (nome + data da entrega). As rotas ficam na aba **Rotas salvas**, visíveis para toda a equipe.
-8. **Abrir no Google Maps** (no celular vira navegação), **Exportar CSV** ou **Imprimir romaneio**.
+8. **📱 Modo motorista** (`/motorista/<id da rota>`): tela de celular com a próxima parada, Navegar, Ligar,
+   WhatsApp e Entregue / Não entregue. A previsão se ajusta a cada entrega marcada.
+9. **💬 WhatsApp** em cada parada: abre a conversa com o cliente com a previsão de chegada.
+10. **Abrir no Google Maps** (no celular vira navegação), **Exportar CSV** ou **Imprimir romaneio**.
 
 ## Como funciona
 

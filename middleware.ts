@@ -38,6 +38,7 @@ export async function middleware(request: NextRequest) {
   if (!user && !isLogin) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
+    url.search = request.nextUrl.pathname === "/" ? "" : `?next=${encodeURIComponent(request.nextUrl.pathname)}`;
     return NextResponse.redirect(url);
   }
 

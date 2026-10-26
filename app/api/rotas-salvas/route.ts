@@ -5,17 +5,21 @@ import { dadosRotaSalva } from "@/lib/rotas-salvas";
 export const dynamic = "force-dynamic";
 
 const CAMPOS_LISTA =
-  "id, nome, data_entrega, qtd_paradas, distancia_total, duracao_total, criado_por_nome, criado_em, atualizado_em";
+  "id, nome, data_entrega, qtd_paradas, distancia_total, duracao_total, criado_por_nome, criado_em, atualizado_em, entregas";
 
 export async function GET() {
   const auth = await exigirUsuario();
   if (auth.erro) return auth.erro;
-  const { data, error } = await auth.supabase
-    .from("rotas_salvas")
-    .select(CAMPOS_LISTA)
-    .order("data_entrega", { ascending: false, nullsFirst: false })
-    .order("criado_em", { ascending: false })
-    .limit(200);
+  const listar = (campos: string) =>
+    auth.supabase
+      .from("rotas_salvas")
+      .select(campos)
+      .order("data_entrega", { ascending: false, nullsFirst: false })
+      .order("criado_em", { ascending: false })
+      .limit(200);
+  let { data, error } = await listar(CAMPOS_LISTA);
+  // Coluna "entregas" ainda não criada (supabase/rotas_entregas.sql): lista sem ela
+  if (error && /entregas/.test(error.message)) ({ data, error } = await listar(CAMPOS_LISTA.replace(", entregas", "")));
   if (error) return respostaErro(new Error(error.message));
   return NextResponse.json({ rotas: data });
 }

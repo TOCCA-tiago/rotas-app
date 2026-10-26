@@ -8,6 +8,10 @@ import type { PinoMapa } from "@/components/mapa";
 import type { ParadaSalva, RotaSalva, RotaSalvaResumo } from "@/lib/rotas-salvas";
 import { hhmmParaSeg, temJanelas, type Horarios, type Janela } from "@/lib/horarios";
 import { ENDERECO_TOCCA } from "@/lib/constantes";
+import { enderecoGoogle } from "@/lib/endereco-google";
+import { calcularChegadas, segParaHhmm } from "@/lib/previsao";
+import { linkWhatsApp, mensagemPrevisao } from "@/lib/whatsapp";
+import type { Entregas } from "@/lib/rotas-salvas";
 
 const Mapa = dynamic(() => import("@/components/mapa"), {
   ssr: false,
@@ -17,10 +21,6 @@ const Mapa = dynamic(() => import("@/components/mapa"), {
 type Origem = { endereco: string; lat: number | null; lon: number | null; manual?: boolean };
 type Coord = { lat: number | null; lon: number | null; precisao: string | null };
 
-const segParaHhmm = (s: number) => {
-  const m = Math.round(s / 60);
-  return `${String(Math.floor(m / 60) % 24).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
-};
 
 const SITUACOES = [
   { valor: "", rotulo: "Todas (exceto canceladas)" },
@@ -45,21 +45,6 @@ const fmtTempo = (s: number) => {
   return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")} min`;
 };
 const fmtMoeda = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-// Endereço para o Google Maps localizar sozinho: sem complemento (apto, sala, "recepção com…"),
-// que costuma confundir a busca.
-function enderecoGoogle(e: Endereco) {
-  const cep = e.cep.length === 8 ? `${e.cep.slice(0, 5)}-${e.cep.slice(5)}` : e.cep;
-  return [
-    [e.logradouro, e.numero].filter(Boolean).join(", "),
-    e.bairro,
-    [e.cidade, e.uf].filter(Boolean).join(" - "),
-    cep,
-    "Brasil",
-  ]
-    .filter(Boolean)
-    .join(", ");
-}
-
 const fmtData = (iso: string | null) => (iso ? iso.slice(0, 10).split("-").reverse().join("/") : "sem data");
 const isoLocal = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -110,6 +95,8 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
   const [tempoParada, setTempoParada] = useState(10);
   const [janelas, setJanelas] = useState<Record<string, Janela>>({});
   const [editandoJanela, setEditandoJanela] = useState<string | null>(null);
+  const [entregas, setEntregas] = useState<Entregas>({});
+  const [motoristaDepoisDeSalvar, setMotoristaDepoisDeSalvar] = useState(false);
 
   // Horário de saída e tempo por parada ficam salvos neste navegador
   useEffect(() => {
@@ -186,6 +173,10 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
       );
       setRotaSalva({ id, nome: formSalvar.nome, data: formSalvar.data });
       setFormSalvar(null);
+      if (motoristaDepoisDeSalvar) {
+        setMotoristaDepoisDeSalvar(false);
+        window.location.href = `/motorista/${id}`;
+      }
       setListaSalvas(null); // recarrega a lista na próxima vez
     } catch (err) {
       alert(`Erro ao salvar a rota: ${(err as Error).message}`);
@@ -209,6 +200,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
       if (rota.resultado.horarios?.saida) setSaida(rota.resultado.horarios.saida);
       if (Number.isFinite(rota.resultado.horarios?.parada)) setTempoParada(rota.resultado.horarios!.parada);
       setRotaSalva({ id: rota.id, nome: rota.nome, data: rota.data_entrega ?? "" });
+      setEntregas(rota.entregas ?? {});
       setFormSalvar(null);
       setBuscou(true);
       setFiltroLista("");
@@ -267,6 +259,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
     if (!numeros.length) return;
     setBuscandoNumeros(true);
     setJanelas({});
+    setEntregas({});
     setRotaSalva(null);
     setFormSalvar(null);
     const encontradas: Nota[] = [];
@@ -340,6 +333,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
       setNotas(todas);
       setSelecionadas([]);
       setJanelas({});
+      setEntregas({});
       setRotaSalva(null);
       setFormSalvar(null);
       setResultado(null);
@@ -513,25 +507,10 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
     reordenar(ids);
   }
 
-  const previsao = useMemo(() => {
-    if (!resultado) return null;
-    const ini = hhmmParaSeg(saida) ?? 8 * 3600;
-    let t = ini;
-    const paradas = resultado.ordem.map((p) => {
-      t += p.duracaoTrecho;
-      const j = janelas[p.id];
-      const jIni = hhmmParaSeg(j?.inicio);
-      const jFim = hhmmParaSeg(j?.fim);
-      const espera = jIni != null && t < jIni ? jIni - t : 0;
-      t += espera;
-      const chegada = t;
-      const atraso = jFim != null && chegada > jFim ? chegada - jFim : 0;
-      t += tempoParada * 60;
-      return { id: p.id, chegada, espera, atraso };
-    });
-    const fim = resultado.retorno ? t + resultado.retorno.duracao : t;
-    return { paradas: new Map(paradas.map((x) => [x.id, x])), fim, atrasos: paradas.filter((x) => x.atraso > 0).length };
-  }, [resultado, saida, tempoParada, janelas]);
+  const previsao = useMemo(
+    () => (resultado ? calcularChegadas(resultado, { saida, parada: tempoParada, janelas }) : null),
+    [resultado, saida, tempoParada, janelas]
+  );
 
   function alterarJanela(id: string, campoJanela: keyof Janela, valor: string) {
     setJanelas((js) => {
@@ -799,6 +778,16 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                   className="rounded-lg bg-marca px-3 py-1.5 font-medium text-white hover:bg-marca-escuro disabled:opacity-50">
                   {rotaSalva ? "Salvar alterações" : "Salvar rota"}
                 </button>
+                <button
+                  onClick={() => {
+                    if (rotaSalva && !formSalvar) window.location.href = `/motorista/${rotaSalva.id}`;
+                    else { setMotoristaDepoisDeSalvar(true); abrirFormSalvar(); }
+                  }}
+                  disabled={recalculando || salvando}
+                  title="Tela de celular para quem vai entregar: navegar, ligar, WhatsApp e marcar entregue"
+                  className="rounded-lg border border-marca bg-white px-3 py-1.5 font-medium text-marca hover:bg-marca-amarelo/30 disabled:opacity-50">
+                  📱 Modo motorista
+                </button>
                 {linksGoogle.map((u, i) => (
                   <a key={u} href={u} target="_blank" rel="noopener noreferrer"
                     className="rounded-lg bg-marca-azul px-3 py-1.5 font-medium text-white hover:opacity-90">
@@ -837,7 +826,10 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                   <button type="button" onClick={() => salvarRota(true)} disabled={salvando || !formSalvar.nome.trim()}
                     className="rounded-md border border-marca-borda px-3 py-1.5 hover:bg-marca-cinza disabled:opacity-50">Salvar como nova</button>
                 )}
-                <button type="button" onClick={() => setFormSalvar(null)} className="px-2 py-1.5 text-slate-500 underline">Cancelar</button>
+                <button type="button" onClick={() => { setFormSalvar(null); setMotoristaDepoisDeSalvar(false); }} className="px-2 py-1.5 text-slate-500 underline">Cancelar</button>
+                {motoristaDepoisDeSalvar && (
+                  <p className="w-full text-xs text-slate-600">Salve a rota para abrir o modo motorista (as entregas marcadas ficam guardadas nela).</p>
+                )}
               </form>
             )}
             <ol className="mt-3 list-decimal space-y-0 pl-6 text-sm">
@@ -866,6 +858,11 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                           if (!prev) return null;
                           return (
                             <p className="mt-0.5 text-xs">
+                              {entregas[p.id] && (
+                                <span className={`mr-1 rounded-full px-1.5 font-semibold ${entregas[p.id].status === "entregue" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}>
+                                  {entregas[p.id].status === "entregue" ? "✓ entregue" : "✗ não entregue"}
+                                </span>
+                              )}
                               <span className="font-semibold text-marca">🕘 chegada ~{segParaHhmm(prev.chegada)}</span>
                               {(j?.inicio || j?.fim) && (
                                 <span className="text-slate-600"> · combinado {j.inicio && j.fim ? `entre ${j.inicio} e ${j.fim}` : j.inicio ? `a partir das ${j.inicio}` : `até ${j.fim}`}</span>
@@ -893,6 +890,14 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-1 print:hidden" title="Arraste a linha ou use as setas para mudar a ordem">
+                        {(() => {
+                          const w = linkWhatsApp(n.fone, mensagemPrevisao(n.cliente, n.numero, previsao?.paradas.get(p.id)?.chegada ?? null));
+                          return (
+                            <a href={w ?? undefined} target="_blank" rel="noopener noreferrer" aria-disabled={!w}
+                              title={w ? "Avisar o cliente pelo WhatsApp com a previsão de chegada" : "Sem celular cadastrado na nota"}
+                              className={`${botao} flex items-center justify-center ${w ? "" : "pointer-events-none opacity-30"}`}>💬</a>
+                          );
+                        })()}
                         <button className={`${botao} ${janelas[p.id] ? "bg-marca-amarelo/50" : ""}`} onClick={() => setEditandoJanela(editandoJanela === p.id ? null : p.id)}
                           title="Horário combinado com o cliente" aria-label="Horário combinado">⏰</button>
                         <button className={botao} disabled={recalculando || k === 0} onClick={() => moverParada(k, k - 1)} aria-label="Subir">↑</button>
