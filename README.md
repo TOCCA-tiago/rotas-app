@@ -19,7 +19,7 @@ Mesma base do CRM: Next.js 14 + Tailwind + Supabase + Vercel. Usa **o mesmo proj
    | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | igual ao do CRM |
    | `TINY_API_TOKEN` | igual ao do CRM |
    | `GOOGLE_MAPS_API_KEY` | opcional, recomendado: chave restrita à Geocoding API (localização precisa) |
-   | `ORIGEM_ENDERECO` | endereço de saída das entregas, ex.: `Rua X, 123, Bairro, Cidade - UF, 00000-000` |
+   | `ORIGEM_ENDERECO` | opcional: endereço de saída padrão (sem ela, usa a TOCCA) |
 
 3. **Domínio**: em Settings → Domains da Vercel, adicione `rotas.tocca.com.br` e crie o CNAME
    `rotas` → `cname.vercel-dns.com` no DNS do domínio.
@@ -32,9 +32,11 @@ Mesma base do CRM: Next.js 14 + Tailwind + Supabase + Vercel. Usa **o mesmo proj
 2. Marque as notas que vão sair para entrega.
 3. Clique em **Montar rota**: o app localiza os endereços, otimiza a ordem e desenha o trajeto.
 4. Se um pino ficar no lugar errado, **arraste-o**. A correção fica salva para todos.
-5. Troque a ordem com ↑ ↓, o seletor de posição, arrastando a linha ou com **Inverter sentido**.
-6. **Salvar rota** (nome + data da entrega). As rotas ficam na aba **Rotas salvas**, visíveis para toda a equipe.
-7. **Abrir no Google Maps** (no celular vira navegação), **Exportar CSV** ou **Imprimir romaneio**.
+5. **Horários:** informe a hora de saída e o tempo em cada parada; o roteiro mostra a chegada prevista em cada
+   cliente. Em uma parada, clique em ⏰ para marcar "chegar entre X e Y" e depois em **⏰ Otimizar com horários**.
+6. Troque a ordem com ↑ ↓, o seletor de posição, arrastando a linha ou com **Inverter sentido**.
+7. **Salvar rota** (nome + data da entrega). As rotas ficam na aba **Rotas salvas**, visíveis para toda a equipe.
+8. **Abrir no Google Maps** (no celular vira navegação), **Exportar CSV** ou **Imprimir romaneio**.
 
 ## Como funciona
 
@@ -44,7 +46,7 @@ Mesma base do CRM: Next.js 14 + Tailwind + Supabase + Vercel. Usa **o mesmo proj
 | Endereço | Endereço de entrega da nota; se não houver, o do cliente |
 | Mapa | Google Geocoding (se houver `GOOGLE_MAPS_API_KEY`); senão Nominatim/OpenStreetMap e BrasilAPI (CEP). Cache em `rotas_geocache`; pino arrastado à mão tem prioridade |
 | Google Maps | O link leva o endereço escrito (sem complemento); pinos ajustados à mão vão como coordenada |
-| Rota | OSRM (`trip` otimiza a ordem; `route` segue a ordem de marcação) |
+| Rota | OSRM (`trip` otimiza a ordem; `route` segue a ordem de marcação). Com horários marcados, a ordem vem de uma busca local sobre a matriz de tempos do OSRM (`lib/horarios.ts`) |
 
 ## Limitações conhecidas
 

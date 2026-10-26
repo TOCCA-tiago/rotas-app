@@ -6,6 +6,8 @@ import type { Endereco, Nota } from "@/lib/tiny";
 import type { ResultadoRota } from "@/lib/osrm";
 import type { PinoMapa } from "@/components/mapa";
 import type { ParadaSalva, RotaSalva, RotaSalvaResumo } from "@/lib/rotas-salvas";
+import { hhmmParaSeg, temJanelas, type Horarios, type Janela } from "@/lib/horarios";
+import { ENDERECO_TOCCA } from "@/lib/constantes";
 
 const Mapa = dynamic(() => import("@/components/mapa"), {
   ssr: false,
@@ -14,6 +16,11 @@ const Mapa = dynamic(() => import("@/components/mapa"), {
 
 type Origem = { endereco: string; lat: number | null; lon: number | null; manual?: boolean };
 type Coord = { lat: number | null; lon: number | null; precisao: string | null };
+
+const segParaHhmm = (s: number) => {
+  const m = Math.round(s / 60);
+  return `${String(Math.floor(m / 60) % 24).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+};
 
 const SITUACOES = [
   { valor: "", rotulo: "Todas (exceto canceladas)" },
@@ -99,6 +106,26 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
   const [salvando, setSalvando] = useState(false);
   const [listaSalvas, setListaSalvas] = useState<RotaSalvaResumo[] | null>(null);
   const [filtroSalvas, setFiltroSalvas] = useState("");
+  const [saida, setSaida] = useState("08:00");
+  const [tempoParada, setTempoParada] = useState(10);
+  const [janelas, setJanelas] = useState<Record<string, Janela>>({});
+  const [editandoJanela, setEditandoJanela] = useState<string | null>(null);
+
+  // Horário de saída e tempo por parada ficam salvos neste navegador
+  useEffect(() => {
+    try {
+      const h = JSON.parse(localStorage.getItem("rotas-horarios") ?? "null");
+      if (h?.saida) setSaida(h.saida);
+      if (Number.isFinite(h?.parada)) setTempoParada(h.parada);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem("rotas-horarios", JSON.stringify({ saida, parada: tempoParada }));
+    } catch {}
+  }, [saida, tempoParada]);
+
+  const horarios: Horarios = { saida, parada: tempoParada, janelas };
 
   // Endereço de saída escolhido na tela fica salvo neste navegador
   useEffect(() => {
@@ -149,7 +176,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
         origem,
         retornar: !!resultado.retorno,
         paradas,
-        resultado,
+        resultado: { ...resultado, horarios },
       };
       const atualizar = rotaSalva && !comoNova;
       const { id } = await api<{ id: string }>(
@@ -178,6 +205,9 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
       setOrigemTexto(rota.origem.endereco);
       setRetornar(rota.retornar);
       setResultado(rota.resultado);
+      setJanelas(rota.resultado.horarios?.janelas ?? {});
+      if (rota.resultado.horarios?.saida) setSaida(rota.resultado.horarios.saida);
+      if (Number.isFinite(rota.resultado.horarios?.parada)) setTempoParada(rota.resultado.horarios!.parada);
       setRotaSalva({ id: rota.id, nome: rota.nome, data: rota.data_entrega ?? "" });
       setFormSalvar(null);
       setBuscou(true);
@@ -201,8 +231,9 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
     }
   }
 
-  async function localizarOrigem() {
-    const endereco = origemTexto.trim();
+  async function localizarOrigem(texto?: string) {
+    const endereco = (texto ?? origemTexto).trim();
+    if (texto) setOrigemTexto(texto);
     if (!endereco) return;
     setLocalizandoOrigem(true);
     try {
@@ -235,6 +266,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
     const numeros = [...new Set(numerosTexto.split(/[^0-9]+/).filter(Boolean).map((n) => String(Number(n))))];
     if (!numeros.length) return;
     setBuscandoNumeros(true);
+    setJanelas({});
     setRotaSalva(null);
     setFormSalvar(null);
     const encontradas: Nota[] = [];
@@ -307,6 +339,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
       }
       setNotas(todas);
       setSelecionadas([]);
+      setJanelas({});
       setRotaSalva(null);
       setFormSalvar(null);
       setResultado(null);
@@ -336,7 +369,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
     setSelecionadas((s) => (todasMarcadas ? s.filter((id) => !ids.includes(id)) : [...s, ...ids.filter((id) => !s.includes(id))]));
   }
 
-  async function montarRota(selecionadas: string[] = selecionadasAtuais, notaPorId = notaPorIdAtual) {
+  async function montarRota(selecionadas: string[] = selecionadasAtuais, notaPorId = notaPorIdAtual, forcarOtimizar = false) {
     if (!origem || origem.lat == null || origem.lon == null) {
       alert("Informe o endereço de saída e clique em Localizar (seção Rota).");
       return;
@@ -373,8 +406,9 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
       const r = await api<ResultadoRota>("/api/rota", {
         origem: { lat: origem.lat, lon: origem.lon },
         paradas,
-        otimizar,
+        otimizar: otimizar || forcarOtimizar,
         retornar,
+        horarios,
       });
       setResultado(r);
       setAba("mapa");
@@ -461,6 +495,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
         paradas: ids.map((id) => ({ id, lat: coords[id].lat!, lon: coords[id].lon! })),
         otimizar: false,
         retornar: !!resultado.retorno,
+        horarios,
       });
       setResultado(r);
     } catch (err) {
@@ -478,12 +513,43 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
     reordenar(ids);
   }
 
+  const previsao = useMemo(() => {
+    if (!resultado) return null;
+    const ini = hhmmParaSeg(saida) ?? 8 * 3600;
+    let t = ini;
+    const paradas = resultado.ordem.map((p) => {
+      t += p.duracaoTrecho;
+      const j = janelas[p.id];
+      const jIni = hhmmParaSeg(j?.inicio);
+      const jFim = hhmmParaSeg(j?.fim);
+      const espera = jIni != null && t < jIni ? jIni - t : 0;
+      t += espera;
+      const chegada = t;
+      const atraso = jFim != null && chegada > jFim ? chegada - jFim : 0;
+      t += tempoParada * 60;
+      return { id: p.id, chegada, espera, atraso };
+    });
+    const fim = resultado.retorno ? t + resultado.retorno.duracao : t;
+    return { paradas: new Map(paradas.map((x) => [x.id, x])), fim, atrasos: paradas.filter((x) => x.atraso > 0).length };
+  }, [resultado, saida, tempoParada, janelas]);
+
+  function alterarJanela(id: string, campoJanela: keyof Janela, valor: string) {
+    setJanelas((js) => {
+      const nova = { ...js[id], [campoJanela]: valor || undefined };
+      const resto = { ...js };
+      if (!nova.inicio && !nova.fim) delete resto[id];
+      else resto[id] = nova;
+      return resto;
+    });
+  }
+
   function exportarCsv() {
     if (!resultado) return;
-    const linhas: (string | number)[][] = [["Ordem", "NF", "Cliente", "Telefone", "Endereço", "Valor", "Km trecho", "Min trecho"]];
+    const linhas: (string | number)[][] = [["Ordem", "Chegada prevista", "NF", "Cliente", "Telefone", "Endereço", "Valor", "Km trecho", "Min trecho"]];
     resultado.ordem.forEach((p, k) => {
       const n = notaPorId.get(p.id)!;
-      linhas.push([k + 1, n.numero, n.cliente, n.fone, n.enderecoTexto, n.valor.toFixed(2).replace(".", ","),
+      const prev = previsao?.paradas.get(p.id);
+      linhas.push([k + 1, prev ? segParaHhmm(prev.chegada) : "", n.numero, n.cliente, n.fone, n.enderecoTexto, n.valor.toFixed(2).replace(".", ","),
         (p.distanciaTrecho / 1000).toFixed(1).replace(".", ","), Math.round(p.duracaoTrecho / 60)]);
     });
     const csv = linhas.map((l) => l.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(";")).join("\r\n");
@@ -644,20 +710,40 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
           <h2 className="font-semibold">Rota</h2>
           <label className="block text-xs text-slate-600">Endereço de saída
             <div className="flex gap-2">
-              <input type="text" className={campo} placeholder="Rua, número, cidade - UF, CEP" value={origemTexto}
+              <input type="search" className={campo} placeholder="Rua, número, cidade - UF, CEP" value={origemTexto}
+                onFocus={(e) => e.currentTarget.select()}
                 onChange={(e) => setOrigemTexto(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); localizarOrigem(); } }} />
-              <button type="button" onClick={localizarOrigem} disabled={localizandoOrigem || !origemTexto.trim()}
+              <button type="button" onClick={() => localizarOrigem()} disabled={localizandoOrigem || !origemTexto.trim()}
                 className="shrink-0 rounded-md border border-marca-borda px-2.5 text-sm hover:bg-marca-cinza disabled:opacity-50">
                 {localizandoOrigem ? "…" : "Localizar"}
               </button>
             </div>
           </label>
+          <button type="button" onClick={() => localizarOrigem(ENDERECO_TOCCA)} disabled={localizandoOrigem}
+            title={ENDERECO_TOCCA}
+            className="flex w-full items-center gap-2 rounded-md border border-marca-borda px-2.5 py-1.5 text-left text-sm hover:bg-marca-amarelo/30 disabled:opacity-50">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/icone-tocca.png" alt="" className="h-6 w-6 rounded" />
+            <span><strong>Sair da TOCCA</strong> <span className="text-xs text-slate-500">· Rua Gustavo Hohendorff, 215 · São Leopoldo</span></span>
+          </button>
           <p className={`text-xs ${origem?.lat != null && origem.endereco === origemTexto.trim() ? "text-green-700" : "text-amber-700"}`}>
             {origem?.lat != null && origem.endereco === origemTexto.trim()
               ? "✓ Saída localizada no mapa (⌂). Arraste o ícone se precisar ajustar."
               : "Digite o endereço de saída e clique em Localizar."}
           </p>
+          <div className="flex gap-2">
+            <label className="flex-1 text-xs text-slate-600">Saída às
+              <input type="time" className={campo} value={saida} onChange={(e) => setSaida(e.target.value || "08:00")} />
+            </label>
+            <label className="flex-1 text-xs text-slate-600">Tempo em cada parada
+              <div className="flex items-center gap-1">
+                <input type="number" min={0} max={240} className={campo} value={tempoParada}
+                  onChange={(e) => setTempoParada(Math.max(0, Number(e.target.value) || 0))} />
+                <span>min</span>
+              </div>
+            </label>
+          </div>
           <label className="flex items-center gap-2">
             <input type="checkbox" checked={otimizar} onChange={(e) => { setOtimizar(e.target.checked); setResultado(null); }} />
             Otimizar ordem das entregas
@@ -696,8 +782,17 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                 <h2 className="titulo text-2xl">{rotaSalva ? rotaSalva.nome : "Roteiro de entregas"}</h2>
                 {rotaSalva && <p className="text-xs text-slate-500">Rota salva · entrega em {fmtData(rotaSalva.data || null)}</p>}
                 <p className="text-sm text-slate-600">
-                  {resultado.ordem.length} entrega(s) · {fmtKm(resultado.distanciaTotal)} · {fmtTempo(resultado.duracaoTotal)} de direção (sem contar as paradas){recalculando && " · recalculando…"}
+                  {resultado.ordem.length} entrega(s) · {fmtKm(resultado.distanciaTotal)} · {fmtTempo(resultado.duracaoTotal)} de direção{recalculando && " · recalculando…"}
                 </p>
+                {previsao && (
+                  <p className="text-sm text-slate-600">
+                    Saída {saida} · {resultado.retorno ? "volta" : "última entrega termina"} por volta das <strong>{segParaHhmm(previsao.fim)}</strong>
+                    <span className="text-xs text-slate-500"> (com {tempoParada} min em cada parada)</span>
+                  </p>
+                )}
+                {previsao && previsao.atrasos > 0 && (
+                  <p className="text-sm font-medium text-red-700">⚠ {previsao.atrasos} entrega(s) fora do horário combinado</p>
+                )}
               </div>
               <div className="flex flex-wrap items-center gap-2 text-sm print:hidden">
                 <button onClick={abrirFormSalvar} disabled={recalculando || salvando}
@@ -710,6 +805,13 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                     Abrir no Google Maps{linksGoogle.length > 1 ? ` (parte ${i + 1})` : ""}
                   </a>
                 ))}
+                {temJanelas(horarios) && (
+                  <button onClick={() => montarRota(resultado.ordem.map((p) => p.id), notaPorId, true)} disabled={recalculando || calculando}
+                    title="Monta a melhor ordem respeitando os horários marcados (⏰)"
+                    className="rounded-lg border border-marca bg-marca-amarelo/40 px-3 py-1.5 font-medium hover:bg-marca-amarelo disabled:opacity-50">
+                    {calculando ? "Otimizando…" : "⏰ Otimizar com horários"}
+                  </button>
+                )}
                 <button onClick={() => resultado && reordenar(resultado.ordem.map((p) => p.id).reverse())} disabled={recalculando}
                   className="rounded-lg border border-marca-borda px-3 py-1.5 hover:bg-marca-cinza disabled:opacity-50">⇅ Inverter sentido</button>
                 <button onClick={exportarCsv} className="rounded-lg border border-marca-borda px-3 py-1.5 hover:bg-marca-cinza">Exportar CSV</button>
@@ -758,8 +860,41 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                         {n.enderecoTexto}
                         <br />
                         <span className="text-xs text-slate-500">+{fmtKm(p.distanciaTrecho)} · {fmtTempo(p.duracaoTrecho)}</span>
+                        {(() => {
+                          const prev = previsao?.paradas.get(p.id);
+                          const j = janelas[p.id];
+                          if (!prev) return null;
+                          return (
+                            <p className="mt-0.5 text-xs">
+                              <span className="font-semibold text-marca">🕘 chegada ~{segParaHhmm(prev.chegada)}</span>
+                              {(j?.inicio || j?.fim) && (
+                                <span className="text-slate-600"> · combinado {j.inicio && j.fim ? `entre ${j.inicio} e ${j.fim}` : j.inicio ? `a partir das ${j.inicio}` : `até ${j.fim}`}</span>
+                              )}
+                              {prev.espera > 0 && <span className="text-amber-700"> · espera {fmtTempo(prev.espera)}</span>}
+                              {prev.atraso > 0 && <span className="font-semibold text-red-700"> · atrasa {fmtTempo(prev.atraso)}</span>}
+                            </p>
+                          );
+                        })()}
+                        {editandoJanela === p.id && (
+                          <div className="mt-1 flex flex-wrap items-end gap-2 rounded-md bg-[#faf8f6] p-2 text-xs text-slate-600 print:hidden">
+                            <label>Chegar a partir das
+                              <input type="time" className={campo} value={janelas[p.id]?.inicio ?? ""}
+                                onChange={(e) => alterarJanela(p.id, "inicio", e.target.value)} />
+                            </label>
+                            <label>até as
+                              <input type="time" className={campo} value={janelas[p.id]?.fim ?? ""}
+                                onChange={(e) => alterarJanela(p.id, "fim", e.target.value)} />
+                            </label>
+                            <button onClick={() => { alterarJanela(p.id, "inicio", ""); alterarJanela(p.id, "fim", ""); }}
+                              className="px-1 py-1.5 underline">Limpar</button>
+                            <button onClick={() => setEditandoJanela(null)} className="rounded-md bg-marca px-2 py-1.5 text-white">OK</button>
+                            <p className="w-full">Para um horário exato, preencha os dois (ex.: 13:50 e 14:10). Depois clique em <strong>⏰ Otimizar com horários</strong>.</p>
+                          </div>
+                        )}
                       </div>
                       <div className="flex shrink-0 items-center gap-1 print:hidden" title="Arraste a linha ou use as setas para mudar a ordem">
+                        <button className={`${botao} ${janelas[p.id] ? "bg-marca-amarelo/50" : ""}`} onClick={() => setEditandoJanela(editandoJanela === p.id ? null : p.id)}
+                          title="Horário combinado com o cliente" aria-label="Horário combinado">⏰</button>
                         <button className={botao} disabled={recalculando || k === 0} onClick={() => moverParada(k, k - 1)} aria-label="Subir">↑</button>
                         <button className={botao} disabled={recalculando || k === total - 1} onClick={() => moverParada(k, k + 1)} aria-label="Descer">↓</button>
                         <select value={k} disabled={recalculando} onChange={(e) => moverParada(k, Number(e.target.value))}

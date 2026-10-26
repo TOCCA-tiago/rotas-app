@@ -16,6 +16,7 @@ export async function POST(request: Request) {
         paradas: body.paradas,
         retornar: !!body.retornar,
         otimizar: body.otimizar !== false,
+        horarios: body.horarios ?? null,
       })
     );
   } catch (err) {

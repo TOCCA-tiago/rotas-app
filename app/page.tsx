@@ -3,6 +3,7 @@ import { usuarioAtivo } from "@/lib/auth";
 import { geocodificarTexto } from "@/lib/geocode";
 import { LogoutButton } from "@/components/logout-button";
 import { RotasApp } from "@/components/rotas-app";
+import { ENDERECO_TOCCA } from "@/lib/constantes";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,7 @@ export default async function Home() {
     );
   }
 
-  const origemEndereco = (process.env.ORIGEM_ENDERECO ?? "").trim();
+  const origemEndereco = (process.env.ORIGEM_ENDERECO ?? "").trim() || ENDERECO_TOCCA;
   const origemPonto = origemEndereco ? await geocodificarTexto(supabase, origemEndereco) : null;
 
   return (
