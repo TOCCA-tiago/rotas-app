@@ -141,7 +141,10 @@ export function Motorista({ rota }: { rota: RotaSalva }) {
             <div>
               <h1 className="text-xl font-bold leading-tight">{n.cliente}</h1>
               <p className="mt-1 text-base">{n.enderecoTexto}</p>
-              <p className="mt-1 text-sm text-slate-600">NF {n.numero} · {fmtMoeda(n.valor)}{n.fone && ` · ${n.fone}`}</p>
+              <p className="mt-1 text-sm text-slate-600">
+                {n.extra ? "📌 Ponto extra" : `NF ${n.numero} · ${fmtMoeda(n.valor)}`}{n.fone && ` · ${n.fone}`}
+              </p>
+              {n.obs && <p className="mt-1 rounded-md bg-marca-amarelo/20 px-2 py-1 text-sm">📝 {n.obs}</p>}
               {(janela?.inicio || janela?.fim) && (
                 <p className="mt-1 text-sm font-medium text-marca">
                   ⏰ Combinado {janela.inicio && janela.fim ? `entre ${janela.inicio} e ${janela.fim}` : janela.inicio ? `a partir das ${janela.inicio}` : `até ${janela.fim}`}

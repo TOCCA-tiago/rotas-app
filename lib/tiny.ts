@@ -28,6 +28,9 @@ export type Nota = {
   fonteEndereco: "entrega" | "cliente" | null;
   endereco: Endereco | null;
   enderecoTexto: string;
+  // Ponto extra (não vem de NF): coleta, banco, Correios… digitado na tela
+  extra?: boolean;
+  obs?: string;
 };
 
 type Retorno = Record<string, any>;

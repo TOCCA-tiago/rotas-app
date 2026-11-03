@@ -30,7 +30,9 @@ Mesma base do CRM: Next.js 14 + Tailwind + Supabase + Vercel. Usa **o mesmo proj
 
 1. Escolha o período e clique em **Buscar notas**.
 2. Marque as notas que vão sair para entrega.
-3. Clique em **Montar rota**: o app localiza os endereços, otimiza a ordem e desenha o trajeto.
+3. Opcional: **📌 Adicionar ponto extra** para paradas que não são NF (coleta, banco, Correios…): nome, endereço,
+   telefone e observação. Com a rota já montada, o ponto entra no fim e pode ser movido.
+4. Clique em **Montar rota**: o app localiza os endereços, otimiza a ordem e desenha o trajeto.
 4. Se um pino ficar no lugar errado, **arraste-o**. A correção fica salva para todos.
 5. **Horários:** informe a hora de saída e o tempo em cada parada; o roteiro mostra a chegada prevista em cada
    cliente. Em uma parada, clique em ⏰ para marcar "chegar entre X e Y" e depois em **⏰ Otimizar com horários**.

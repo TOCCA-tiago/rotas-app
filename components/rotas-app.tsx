@@ -45,6 +45,8 @@ const fmtTempo = (s: number) => {
   return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")} min`;
 };
 const fmtMoeda = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const rotuloNota = (n: Nota) => (n.extra ? "📌 Ponto extra" : `NF ${n.numero}`);
+
 const fmtData = (iso: string | null) => (iso ? iso.slice(0, 10).split("-").reverse().join("/") : "sem data");
 const isoLocal = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -97,6 +99,8 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
   const [editandoJanela, setEditandoJanela] = useState<string | null>(null);
   const [entregas, setEntregas] = useState<Entregas>({});
   const [motoristaDepoisDeSalvar, setMotoristaDepoisDeSalvar] = useState(false);
+  const [extra, setExtra] = useState({ nome: "", endereco: "", fone: "", obs: "" });
+  const [adicionandoExtra, setAdicionandoExtra] = useState(false);
 
   // Horário de saída e tempo por parada ficam salvos neste navegador
   useEffect(() => {
@@ -290,7 +294,9 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
         semEndereco.length && `NF sem endereço: ${semEndereco.join(", ")}`,
       ].filter(Boolean);
       if (avisos.length) alert(avisos.join("\n"));
-      if (ids.length) await montarRota(ids, new Map(novasNotas.map((n) => [n.id, n])));
+      const extrasMarcados = selecionadas.filter((id) => notaPorId.get(id)?.extra);
+      if (extrasMarcados.length) setSelecionadas([...extrasMarcados, ...ids]);
+      if (ids.length) await montarRota([...extrasMarcados, ...ids], new Map(novasNotas.map((n) => [n.id, n])));
       else setProgresso("");
     } catch (err) {
       setProgresso("");
@@ -330,8 +336,8 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
           // segue sem endereço; a nota aparece desabilitada na lista
         }
       }
-      setNotas(todas);
-      setSelecionadas([]);
+      setNotas([...notas.filter((n) => n.extra), ...todas]);
+      setSelecionadas((s) => s.filter((id) => notaPorId.get(id)?.extra));
       setJanelas({});
       setEntregas({});
       setRotaSalva(null);
@@ -374,7 +380,10 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
       const novas = { ...coords };
       // Também refaz os pontos aproximados: o servidor pode ter um resultado melhor (Google)
       const pendentes = selecionadas.filter(
-        (id) => notaPorId.get(id)?.endereco && !["endereco", "manual"].includes(novas[id]?.precisao ?? "")
+        (id) =>
+          notaPorId.get(id)?.endereco &&
+          !(notaPorId.get(id)!.extra && novas[id]?.lat != null) &&
+          !["endereco", "manual"].includes(novas[id]?.precisao ?? "")
       );
       let erroG: string | null = null;
       for (const [i, id] of pendentes.entries()) {
@@ -443,7 +452,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
         lat: c.lat,
         lon: c.lon,
         rotulo: k ? String(k) : null,
-        tooltip: `NF ${n.numero} — ${n.cliente}<br>${n.enderecoTexto}<br><small>Arraste para corrigir a posição</small>`,
+        tooltip: `${rotuloNota(n)} — ${n.cliente}<br>${n.enderecoTexto}<br><small>Arraste para corrigir a posição</small>`,
       }];
     });
   }, [selecionadas, coords, notaPorId, resultado]);
@@ -522,13 +531,95 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
     });
   }
 
+  async function adicionarExtra(e: React.FormEvent) {
+    e.preventDefault();
+    const nome = extra.nome.trim();
+    const endereco = extra.endereco.trim();
+    if (!nome || !endereco) return;
+    setAdicionandoExtra(true);
+    try {
+      const p = await api<Coord>("/api/origem", { endereco });
+      if (p.lat == null || p.lon == null) {
+        alert("Não encontrei esse endereço. Tente com rua, número, cidade e UF.");
+        return;
+      }
+      const id = `extra-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      const nota: Nota = {
+        id,
+        numero: "",
+        serie: "",
+        dataEmissao: "",
+        cliente: nome,
+        fone: extra.fone.trim(),
+        valor: 0,
+        situacao: "",
+        descricaoSituacao: "",
+        fonteEndereco: null,
+        // Endereço digitado vai inteiro em "logradouro": é assim que ele segue para o Google Maps
+        endereco: { logradouro: endereco, numero: "", complemento: "", bairro: "", cep: "", cidade: "", uf: "" },
+        enderecoTexto: endereco,
+        extra: true,
+        obs: extra.obs.trim() || undefined,
+      };
+      setNotas((ns) => [nota, ...ns]);
+      setCoords((c) => ({ ...c, [id]: { lat: p.lat, lon: p.lon, precisao: p.precisao } }));
+      setSelecionadas((s) => [...s, id]);
+      setBuscou(true);
+      setExtra({ nome: "", endereco: "", fone: "", obs: "" });
+      setFocar({ lat: p.lat, lon: p.lon });
+      // Rota já montada: entra no fim, mantendo a ordem atual (dá para mover ou otimizar de novo)
+      if (resultado && origem?.lat != null && origem.lon != null) {
+        setRecalculando(true);
+        try {
+          const r = await api<ResultadoRota>("/api/rota", {
+            origem: { lat: origem.lat, lon: origem.lon },
+            paradas: [
+              ...resultado.ordem.map((x) => ({ id: x.id, lat: coords[x.id].lat!, lon: coords[x.id].lon! })),
+              { id, lat: p.lat, lon: p.lon },
+            ],
+            otimizar: false,
+            retornar: !!resultado.retorno,
+            horarios,
+          });
+          setResultado(r);
+        } finally {
+          setRecalculando(false);
+        }
+      }
+    } catch (err) {
+      alert(`Erro ao adicionar o ponto: ${(err as Error).message}`);
+    } finally {
+      setAdicionandoExtra(false);
+    }
+  }
+
+  function removerExtra(id: string) {
+    setNotas((ns) => ns.filter((n) => n.id !== id));
+    setSelecionadas((s) => s.filter((x) => x !== id));
+    if (resultado?.ordem.some((x) => x.id === id)) {
+      const resto = resultado.ordem.map((x) => x.id).filter((x) => x !== id);
+      if (resto.length) reordenar(resto);
+      else setResultado(null);
+    }
+  }
+
+  function irParaPontoExtra() {
+    setPainel("nova");
+    setAba("lista");
+    setTimeout(() => {
+      const f = document.getElementById("form-ponto-extra");
+      f?.scrollIntoView({ behavior: "smooth", block: "center" });
+      f?.querySelector("input")?.focus();
+    }, 50);
+  }
+
   function exportarCsv() {
     if (!resultado) return;
     const linhas: (string | number)[][] = [["Ordem", "Chegada prevista", "NF", "Cliente", "Telefone", "Endereço", "Valor", "Km trecho", "Min trecho"]];
     resultado.ordem.forEach((p, k) => {
       const n = notaPorId.get(p.id)!;
       const prev = previsao?.paradas.get(p.id);
-      linhas.push([k + 1, prev ? segParaHhmm(prev.chegada) : "", n.numero, n.cliente, n.fone, n.enderecoTexto, n.valor.toFixed(2).replace(".", ","),
+      linhas.push([k + 1, prev ? segParaHhmm(prev.chegada) : "", n.extra ? "ponto extra" : n.numero, n.cliente, n.fone, n.enderecoTexto, n.valor.toFixed(2).replace(".", ","),
         (p.distanciaTrecho / 1000).toFixed(1).replace(".", ","), Math.round(p.duracaoTrecho / 60)]);
     });
     const csv = linhas.map((l) => l.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(";")).join("\r\n");
@@ -669,21 +760,48 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                   <input type="checkbox" checked={marcado} disabled={!n.endereco} readOnly className="mt-1" />
                   <div className="min-w-0 flex-1">
                     <div className="flex justify-between gap-2 text-sm font-semibold">
-                      <span className="truncate">NF {n.numero} · {n.cliente}</span>
+                      <span className="truncate">{rotuloNota(n)} · {n.cliente}</span>
                       {tag && <span className={`shrink-0 self-start rounded-full border px-1.5 text-[11px] font-normal ${tag[0]}`}>{tag[1]}</span>}
                     </div>
                     <p className="break-words text-xs text-slate-600">{n.enderecoTexto || "Endereço não informado na nota"}</p>
-                    <p className="text-xs text-slate-500">
-                      {n.dataEmissao} · {fmtMoeda(n.valor)}
-                      {n.descricaoSituacao && ` · ${n.descricaoSituacao}`}
-                      {n.fonteEndereco === "entrega" && " · end. de entrega"}
-                    </p>
+                    {n.extra ? (
+                      <p className="flex justify-between gap-2 text-xs text-slate-500">
+                        <span className="min-w-0 break-words">{[n.fone, n.obs].filter(Boolean).join(" · ") || "Ponto extra"}</span>
+                        <button onClick={(e) => { e.stopPropagation(); removerExtra(n.id); }}
+                          className="shrink-0 text-red-700 underline">remover</button>
+                      </p>
+                    ) : (
+                      <p className="text-xs text-slate-500">
+                        {n.dataEmissao} · {fmtMoeda(n.valor)}
+                        {n.descricaoSituacao && ` · ${n.descricaoSituacao}`}
+                        {n.fonteEndereco === "entrega" && " · end. de entrega"}
+                      </p>
+                    )}
                   </div>
                 </li>
               );
             })}
           </ul>
         </section>
+
+        <form id="form-ponto-extra" onSubmit={adicionarExtra} className="space-y-2 rounded-xl border border-marca-borda bg-white p-3 text-sm">
+          <h2 className="font-semibold">📌 Adicionar ponto extra</h2>
+          <p className="text-xs text-slate-500">Parada que não é NF: coleta em fornecedor, banco, Correios, visita…</p>
+          <input required className={campo} placeholder="Nome (ex.: Coleta – Fornecedor X)" value={extra.nome}
+            onChange={(e) => setExtra({ ...extra, nome: e.target.value })} />
+          <input required className={campo} placeholder="Endereço (rua, número, cidade - UF)" value={extra.endereco}
+            onChange={(e) => setExtra({ ...extra, endereco: e.target.value })} />
+          <div className="flex gap-2">
+            <input className={campo} placeholder="Telefone (opcional)" value={extra.fone} inputMode="tel"
+              onChange={(e) => setExtra({ ...extra, fone: e.target.value })} />
+            <input className={campo} placeholder="Observação (opcional)" value={extra.obs}
+              onChange={(e) => setExtra({ ...extra, obs: e.target.value })} />
+          </div>
+          <button type="submit" disabled={adicionandoExtra || !extra.nome.trim() || !extra.endereco.trim()}
+            className="w-full rounded-md border border-marca bg-marca-amarelo/40 px-3 py-2 font-medium hover:bg-marca-amarelo disabled:opacity-50">
+            {adicionandoExtra ? "Localizando…" : resultado ? "Adicionar ao fim da rota" : "Adicionar"}
+          </button>
+        </form>
 
         <section className="space-y-2 rounded-xl border border-marca-borda bg-white p-3 text-sm">
           <h2 className="font-semibold">Rota</h2>
@@ -803,6 +921,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                 )}
                 <button onClick={() => resultado && reordenar(resultado.ordem.map((p) => p.id).reverse())} disabled={recalculando}
                   className="rounded-lg border border-marca-borda px-3 py-1.5 hover:bg-marca-cinza disabled:opacity-50">⇅ Inverter sentido</button>
+                <button onClick={irParaPontoExtra} className="rounded-lg border border-marca-borda px-3 py-1.5 hover:bg-marca-cinza">📌 Ponto extra</button>
                 <button onClick={exportarCsv} className="rounded-lg border border-marca-borda px-3 py-1.5 hover:bg-marca-cinza">Exportar CSV</button>
                 <button onClick={() => window.print()} className="rounded-lg border border-marca-borda px-3 py-1.5 hover:bg-marca-cinza">Imprimir romaneio</button>
               </div>
@@ -847,7 +966,8 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                     className={`border-b border-marca-borda py-2 ${arrastando === k ? "opacity-40" : ""} ${recalculando ? "opacity-60" : ""}`}>
                     <div className="flex items-start gap-3">
                       <div className="min-w-0 flex-1">
-                        <strong>{n.cliente}</strong> — NF {n.numero}{n.fone && ` · ${n.fone}`}
+                        <strong>{n.cliente}</strong> — {rotuloNota(n)}{n.fone && ` · ${n.fone}`}
+                        {n.obs && <span className="text-slate-600"> · 📝 {n.obs}</span>}
                         <br />
                         {n.enderecoTexto}
                         <br />
@@ -891,7 +1011,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                       </div>
                       <div className="flex shrink-0 items-center gap-1 print:hidden" title="Arraste a linha ou use as setas para mudar a ordem">
                         {(() => {
-                          const w = linkWhatsApp(n.fone, mensagemPrevisao(n.cliente, n.numero, previsao?.paradas.get(p.id)?.chegada ?? null));
+                          const w = linkWhatsApp(n.fone, mensagemPrevisao(n.cliente, n.extra ? "" : n.numero, previsao?.paradas.get(p.id)?.chegada ?? null));
                           return (
                             <a href={w ?? undefined} target="_blank" rel="noopener noreferrer" aria-disabled={!w}
                               title={w ? "Avisar o cliente pelo WhatsApp com a previsão de chegada" : "Sem celular cadastrado na nota"}

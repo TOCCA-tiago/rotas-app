@@ -20,7 +20,8 @@ export function mensagemPrevisao(cliente: string, numeroNf: string, chegadaSeg: 
   const nome = cliente.trim().split(/\s+/)[0] ?? "";
   const saudacao = nome && nome === nome.toUpperCase() && nome.length > 3 ? "Olá!" : `Olá, ${nome}!`;
   const quando = chegadaSeg != null ? ` A previsão de chegada é entre ${janelaMeiaHora(chegadaSeg)}.` : "";
-  return `${saudacao} Aqui é da TOCCA. Sua entrega (NF ${Number(numeroNf) || numeroNf}) está a caminho.${quando} Qualquer coisa, é só responder esta mensagem.`;
+  const oQue = numeroNf ? `Sua entrega (NF ${Number(numeroNf) || numeroNf}) está a caminho.` : "Estamos a caminho.";
+  return `${saudacao} Aqui é da TOCCA. ${oQue}${quando} Qualquer coisa, é só responder esta mensagem.`;
 }
 
 export function linkWhatsApp(fone: string | null | undefined, texto: string) {
