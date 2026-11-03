@@ -95,7 +95,7 @@ export function Motorista({ rota }: { rota: RotaSalva }) {
     return `https://www.google.com/maps/dir/?${new URLSearchParams({ api: "1", travelmode: "driving", destination: destino })}`;
   };
 
-  const whats = n ? linkWhatsApp(n.fone, mensagemPrevisao(n.cliente, n.numero, prev?.chegada ?? null)) : null;
+  const whats = n ? linkWhatsApp(n.fone, mensagemPrevisao(n.extra ? "" : n.cliente, n.extra ? "" : n.numero, prev?.chegada ?? null)) : null;
   const tel = n?.fone ? `tel:${n.fone.replace(/[^\d+]/g, "")}` : null;
   const concluida = feitas === ordem.length && ordem.length > 0;
   const botao = "flex items-center justify-center gap-2 rounded-xl px-3 py-3 text-base font-semibold";

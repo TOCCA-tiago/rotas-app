@@ -18,7 +18,8 @@ function janelaMeiaHora(chegadaSeg: number) {
 
 export function mensagemPrevisao(cliente: string, numeroNf: string, chegadaSeg: number | null) {
   const nome = cliente.trim().split(/\s+/)[0] ?? "";
-  const saudacao = nome && nome === nome.toUpperCase() && nome.length > 3 ? "Olá!" : `Olá, ${nome}!`;
+  // Sem nome (ponto extra) ou nome de empresa em maiúsculas: só "Olá!"
+  const saudacao = !nome || (nome === nome.toUpperCase() && nome.length > 3) ? "Olá!" : `Olá, ${nome}!`;
   const quando = chegadaSeg != null ? ` A previsão de chegada é entre ${janelaMeiaHora(chegadaSeg)}.` : "";
   const oQue = numeroNf ? `Sua entrega (NF ${Number(numeroNf) || numeroNf}) está a caminho.` : "Estamos a caminho.";
   return `${saudacao} Aqui é da TOCCA. ${oQue}${quando} Qualquer coisa, é só responder esta mensagem.`;

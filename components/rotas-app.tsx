@@ -1011,7 +1011,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                       </div>
                       <div className="flex shrink-0 items-center gap-1 print:hidden" title="Arraste a linha ou use as setas para mudar a ordem">
                         {(() => {
-                          const w = linkWhatsApp(n.fone, mensagemPrevisao(n.cliente, n.extra ? "" : n.numero, previsao?.paradas.get(p.id)?.chegada ?? null));
+                          const w = linkWhatsApp(n.fone, mensagemPrevisao(n.extra ? "" : n.cliente, n.extra ? "" : n.numero, previsao?.paradas.get(p.id)?.chegada ?? null));
                           return (
                             <a href={w ?? undefined} target="_blank" rel="noopener noreferrer" aria-disabled={!w}
                               title={w ? "Avisar o cliente pelo WhatsApp com a previsão de chegada" : "Sem celular cadastrado na nota"}
