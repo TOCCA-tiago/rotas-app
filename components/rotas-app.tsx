@@ -486,12 +486,18 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
   }, [resultado, coords, origemMapa, origem, notaPorId]);
 
   const [recalculando, setRecalculando] = useState(false);
+  // Pontos extras adicionados ao fim de uma rota já montada, ainda não reotimizados
+  const [novosNoFim, setNovosNoFim] = useState(0);
+  useEffect(() => {
+    if (!resultado) setNovosNoFim(0);
+  }, [resultado]);
   const [arrastando, setArrastando] = useState<number | null>(null);
 
   // Troca manual da ordem: recalcula o trajeto seguindo exatamente a nova sequência
   async function reordenar(ids: string[]) {
     if (!resultado || !origem || origem.lat == null || origem.lon == null || recalculando) return;
     setRecalculando(true);
+    setNovosNoFim(0); // ordem ajustada à mão: o aviso de pontos no fim deixa de valer
     try {
       const r = await api<ResultadoRota>("/api/rota", {
         origem: { lat: origem.lat, lon: origem.lon },
@@ -582,6 +588,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
             horarios,
           });
           setResultado(r);
+          setNovosNoFim((n) => n + 1);
         } finally {
           setRecalculando(false);
         }
@@ -799,7 +806,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
           </div>
           <button type="submit" disabled={adicionandoExtra || !extra.nome.trim() || !extra.endereco.trim()}
             className="w-full rounded-md border border-marca bg-marca-amarelo/40 px-3 py-2 font-medium hover:bg-marca-amarelo disabled:opacity-50">
-            {adicionandoExtra ? "Localizando…" : resultado ? "Adicionar ao fim da rota" : "Adicionar"}
+            {adicionandoExtra ? "Localizando…" : resultado ? "Adicionar à rota" : "Adicionar"}
           </button>
         </form>
 
@@ -887,6 +894,11 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                     <span className="text-xs text-slate-500"> (com {tempoParada} min em cada parada)</span>
                   </p>
                 )}
+                {novosNoFim > 0 && (
+                  <p className="text-sm font-medium text-amber-700">
+                    {novosNoFim} ponto(s) novo(s) no fim da rota. Clique em <strong>🔄 Reotimizar rota</strong> para encaixá-los no melhor lugar.
+                  </p>
+                )}
                 {previsao && previsao.atrasos > 0 && (
                   <p className="text-sm font-medium text-red-700">⚠ {previsao.atrasos} entrega(s) fora do horário combinado</p>
                 )}
@@ -912,13 +924,14 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                     Abrir no Google Maps{linksGoogle.length > 1 ? ` (parte ${i + 1})` : ""}
                   </a>
                 ))}
-                {temJanelas(horarios) && (
-                  <button onClick={() => montarRota(resultado.ordem.map((p) => p.id), notaPorId, true)} disabled={recalculando || calculando}
-                    title="Monta a melhor ordem respeitando os horários marcados (⏰)"
-                    className="rounded-lg border border-marca bg-marca-amarelo/40 px-3 py-1.5 font-medium hover:bg-marca-amarelo disabled:opacity-50">
-                    {calculando ? "Otimizando…" : "⏰ Otimizar com horários"}
-                  </button>
-                )}
+                <button onClick={() => montarRota(resultado.ordem.map((p) => p.id), notaPorId, true)} disabled={recalculando || calculando}
+                  title={temJanelas(horarios)
+                    ? "Reorganiza todas as paradas (inclusive pontos extras) na melhor ordem, respeitando os horários marcados (⏰)"
+                    : "Reorganiza todas as paradas (inclusive pontos extras) na melhor ordem"}
+                  className={`rounded-lg border border-marca px-3 py-1.5 font-medium disabled:opacity-50 ${
+                    novosNoFim ? "animate-pulse bg-marca-amarelo" : "bg-marca-amarelo/40 hover:bg-marca-amarelo"}`}>
+                  {calculando ? "Otimizando…" : temJanelas(horarios) ? "🔄 Reotimizar (com horários)" : "🔄 Reotimizar rota"}
+                </button>
                 <button onClick={() => resultado && reordenar(resultado.ordem.map((p) => p.id).reverse())} disabled={recalculando}
                   className="rounded-lg border border-marca-borda px-3 py-1.5 hover:bg-marca-cinza disabled:opacity-50">⇅ Inverter sentido</button>
                 <button onClick={irParaPontoExtra} className="rounded-lg border border-marca-borda px-3 py-1.5 hover:bg-marca-cinza">📌 Ponto extra</button>
@@ -1005,7 +1018,7 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
                             <button onClick={() => { alterarJanela(p.id, "inicio", ""); alterarJanela(p.id, "fim", ""); }}
                               className="px-1 py-1.5 underline">Limpar</button>
                             <button onClick={() => setEditandoJanela(null)} className="rounded-md bg-marca px-2 py-1.5 text-white">OK</button>
-                            <p className="w-full">Para um horário exato, preencha os dois (ex.: 13:50 e 14:10). Depois clique em <strong>⏰ Otimizar com horários</strong>.</p>
+                            <p className="w-full">Para um horário exato, preencha os dois (ex.: 13:50 e 14:10). Depois clique em <strong>🔄 Reotimizar</strong>.</p>
                           </div>
                         )}
                       </div>
