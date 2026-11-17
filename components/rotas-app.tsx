@@ -378,12 +378,14 @@ export function RotasApp({ origemInicial, tinyConfigurado }: { origemInicial: Or
     setResultado(null);
     try {
       const novas = { ...coords };
-      // Também refaz os pontos aproximados: o servidor pode ter um resultado melhor (Google)
+      // Reconfere todos os pontos no servidor (que responde do cache quando já conhece o endereço):
+      // ele pode ter um resultado melhor (Google) ou ter descartado um ponto longe da cidade da nota.
+      // Pinos ajustados à mão e pontos extras ficam como estão.
       const pendentes = selecionadas.filter(
         (id) =>
           notaPorId.get(id)?.endereco &&
           !(notaPorId.get(id)!.extra && novas[id]?.lat != null) &&
-          !["endereco", "manual"].includes(novas[id]?.precisao ?? "")
+          novas[id]?.precisao !== "manual"
       );
       let erroG: string | null = null;
       for (const [i, id] of pendentes.entries()) {

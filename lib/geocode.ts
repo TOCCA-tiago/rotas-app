@@ -41,7 +41,7 @@ async function brasilApiCep(cep: string) {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function geocodificarSemCache(e: Endereco): Promise<Ponto | null> {
+async function geocodificarSemCache(e: Endereco, valido: (p: Ponto) => boolean): Promise<Ponto | null> {
   const cepFmt = e.cep.length === 8 ? `${e.cep.slice(0, 5)}-${e.cep.slice(5)}` : "";
   const tentativas: [string, () => Promise<{ lat: number; lon: number } | null>][] = [
     ["endereco", () => nominatim({ street: `${e.numero} ${e.logradouro}`.trim(), city: e.cidade, state: e.uf, country: "Brasil" })],
@@ -56,7 +56,8 @@ async function geocodificarSemCache(e: Endereco): Promise<Ponto | null> {
   for (const [precisao, fn] of tentativas) {
     try {
       const hit = await fn();
-      if (hit) return { ...hit, precisao };
+      if (hit && valido({ ...hit, precisao })) return { ...hit, precisao };
+      if (hit) console.warn(`[geocode] ${precisao}: descartado, longe de ${e.cidade}`);
     } catch (err) {
       console.warn(`[geocode] ${precisao}:`, err);
     }
@@ -83,10 +84,10 @@ function precisaoGoogle(r: any): string {
   return "cidade";
 }
 
-async function google(endereco: string): Promise<Ponto | null> {
+async function google(endereco: string, uf?: string): Promise<Ponto | null> {
   const qs = new URLSearchParams({
     address: endereco,
-    components: "country:BR",
+    components: uf ? `country:BR|administrative_area:${uf}` : "country:BR",
     region: "br",
     language: "pt-BR",
     key: process.env.GOOGLE_MAPS_API_KEY!,
@@ -120,6 +121,26 @@ async function gravarCache(supabase: SupabaseClient, chave: string, p: Ponto) {
   await supabase.from("rotas_geocache").upsert({ chave, ...p, atualizado_em: new Date().toISOString() });
 }
 
+// ---------------------------------------------------------------------------
+// Trava de distância: ruas com o mesmo nome existem em várias cidades (ex.: Rua Marquês do
+// Herval em Porto Alegre e em outras do RS). Um ponto a mais de LIMITE_KM do centro da cidade
+// da nota é descartado, inclusive quando vem do cache (corrige resultados antigos).
+
+const LIMITE_KM = 50;
+
+function distanciaKm(a: { lat: number; lon: number }, b: { lat: number; lon: number }) {
+  const rad = (x: number) => (x * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLon = rad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(h));
+}
+
+async function centroCidade(supabase: SupabaseClient, e: Endereco) {
+  if (!e.cidade) return null;
+  return geocodificarTexto(supabase, [e.cidade, e.uf, "Brasil"].filter(Boolean).join(", "));
+}
+
 export async function geocodificar(supabase: SupabaseClient, e: Endereco) {
   const chave = chaveEndereco(e);
   const chaveG = `g|${chave}`;
@@ -127,16 +148,20 @@ export async function geocodificar(supabase: SupabaseClient, e: Endereco) {
   const manual = cache.get(chave);
   if (manual?.precisao === "manual") return { lat: manual.lat, lon: manual.lon, precisao: "manual", cache: true };
 
+  const centro = await centroCidade(supabase, e).catch(() => null);
+  const valido = (p: { lat: number; lon: number }) => !centro || distanciaKm(p, centro) <= LIMITE_KM;
+
   let erroGoogle: string | undefined;
   if (usarGoogle()) {
     const g = cache.get(chaveG);
-    if (g) return { lat: g.lat, lon: g.lon, precisao: g.precisao, fonte: "google", cache: true };
+    if (g && valido(g)) return { lat: g.lat, lon: g.lon, precisao: g.precisao, fonte: "google", cache: true };
     try {
-      const ponto = await google(textoGoogle(e));
-      if (ponto) {
+      const ponto = await google(textoGoogle(e), e.uf || undefined);
+      if (ponto && valido(ponto)) {
         await gravarCache(supabase, chaveG, ponto);
         return { ...ponto, fonte: "google", cache: true }; // Google não precisa da pausa do Nominatim
       }
+      if (ponto) console.warn(`[geocode] google: descartado, longe de ${e.cidade}`);
     } catch (err) {
       erroGoogle = err instanceof Error ? err.message : String(err);
       console.warn("[geocode] google:", erroGoogle); // cai para o OpenStreetMap
@@ -145,12 +170,15 @@ export async function geocodificar(supabase: SupabaseClient, e: Endereco) {
 
   // A tela mostra erroGoogle, para ficar claro quando a chave não está funcionando
   const osm = cache.get(chave);
-  if (osm) return { lat: osm.lat, lon: osm.lon, precisao: osm.precisao, fonte: "osm", cache: true, erroGoogle };
-  const ponto = await geocodificarSemCache(e);
-  if (ponto) await gravarCache(supabase, chave, ponto);
-  return ponto
-    ? { ...ponto, fonte: "osm", cache: false, erroGoogle }
-    : { lat: null, lon: null, precisao: null, fonte: null, cache: false, erroGoogle };
+  if (osm && valido(osm)) return { lat: osm.lat, lon: osm.lon, precisao: osm.precisao, fonte: "osm", cache: true, erroGoogle };
+  const ponto = await geocodificarSemCache(e, valido);
+  if (ponto) {
+    await gravarCache(supabase, chave, ponto);
+    return { ...ponto, fonte: "osm", cache: false, erroGoogle };
+  }
+  // Nada confiável: centro da cidade, marcado como "só cidade" para o usuário arrastar o pino
+  if (centro) return { lat: centro.lat, lon: centro.lon, precisao: "cidade", fonte: "cidade", cache: false, erroGoogle };
+  return { lat: null, lon: null, precisao: null, fonte: null, cache: false, erroGoogle };
 }
 
 export async function salvarManual(supabase: SupabaseClient, chave: string, lat: number, lon: number) {
